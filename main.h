@@ -5,8 +5,8 @@
  *      Author: jcaf
  */
 
-#ifndef SRC_MAIN_H_
-#define SRC_MAIN_H_
+#ifndef MAIN_H_
+#define MAIN_H_
 
 //BUZZER
 #define PORTWxBUZZER  	PORTB
@@ -25,4 +25,4 @@
 #define CONFIGIOxOUT2 	DDRD
 #define PINxOUT2 7
 
-#endif /* SRC_MAIN_H_ */
+#endif /* MAIN_H_ */

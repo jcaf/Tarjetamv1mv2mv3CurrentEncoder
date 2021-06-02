@@ -14,10 +14,15 @@
     #define ADS1115_HI_THRH_REG 0x03//Hi_threshold
 
     //Config register AS 2-8Bits
-    #define OS_BIT      7//15
-    #define MUX_BIT     4//12
-    #define PGA_BIT     1//9
-    #define MODE_BIT    0//8
+//    #define OS_BIT      7//15
+//    #define MUX_BIT     4//12
+//    #define PGA_BIT     1//9
+//    #define MODE_BIT    0//8
+
+	#define OS_BIT      15
+    #define MUX_BIT     12
+    #define PGA_BIT     9
+    #define MODE_BIT    8
     //
     #define DR_BIT          5
     #define COMP_MODE_BIT   4
@@ -57,6 +62,23 @@
 
     //MODE
     #define CONTINUOUS_CONV 0
-    #define SINGLESHOT_CONV 1
+    #define SINGLESHOT_POWERDOWN_CONV 1
+
+
+inline void ADS1115_write_data16bits(uint8_t ADS1115_I2Caddr, uint8_t ADS1115register, uint16_t data16bits);
+
+/*
+ * Si es necesario usar una variable global para llevar la pista en RAM del CONFIG_REG
+ */
+#define ADS1115_CONFIG_REG_UPDATE_IN_RUNTIME
+
+#ifdef ADS1115_CONFIG_REG_UPDATE_IN_RUNTIME
+	void ADS1115_init(void);
+	void ADS1115_setOS(uint8_t OS);
+	void ADS1115_setMuxChannel(uint8_t MUX);
+	void ADS1115_setPGA(uint8_t PGA);
+	void ADS1115_setOperatingMode(uint8_t MODE);
+	void ADS1115_setDataRate(uint8_t DR);
+#endif
 
 #endif // ADS_1115_H_
