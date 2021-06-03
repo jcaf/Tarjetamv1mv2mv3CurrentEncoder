@@ -65,7 +65,8 @@
     #define SINGLESHOT_POWERDOWN_CONV 1
 
 
-inline void ADS1115_write_data16bits(uint8_t ADS1115_I2Caddr, uint8_t ADS1115register, uint16_t data16bits);
+
+void ADS1115_write_data16bits(uint8_t ADS1115_I2Caddr, uint8_t ADS1115register, uint16_t data16bits);
 
 /*
  * Si es necesario usar una variable global para llevar la pista en RAM del CONFIG_REG

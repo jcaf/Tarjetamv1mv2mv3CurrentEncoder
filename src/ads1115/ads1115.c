@@ -9,7 +9,7 @@
  * todas las funciones y variable a traves de la directiva ADS1115_CONTROL_BITS
  */
 
-inline void ADS1115_write_data16bits(uint8_t ADS1115_I2Caddr, uint8_t ADS1115register, uint16_t data16bits)
+void ADS1115_write_data16bits(uint8_t ADS1115_I2Caddr, uint8_t ADS1115register, uint16_t data16bits)
 {
 	uint8_t reg[2];
 	reg[0] = (uint8_t)(data16bits>>8);

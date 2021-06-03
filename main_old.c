@@ -178,16 +178,6 @@ void buzzer_job(void);
 
 int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer);
 
-/*
- * Host-to-device or tact-switch on-board reset the sequence, reset all state machines
- */
-void sequence_reset(void)
-{
-	smoothAlgJob =	capturemvx = sequencemain = buzzer = emptyJob;
-}
-/*
- *
- */
 int8_t ADS1115_capture_mvx(float *mvx)
 {
 	int16_t ib16;
@@ -332,9 +322,6 @@ int main(void)
 
 					ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
 					ADS1115_setOperatingMode(CONTINUOUS_CONV);
-
-
-
 					sequencemain.sm0++;
 				}
 			}
@@ -346,9 +333,6 @@ int main(void)
 				if (++sequencemain.counter >= 1)//setup Time new channel ADS1115
 				{
 					sequencemain.counter = 0;
-
-					buzzer.f.job = 1;
-
 					sequencemain.sm0++;
 				}
 			}
@@ -399,9 +383,6 @@ int main(void)
 				if (++sequencemain.counter >= 1)//setup Time new channel ADS1115
 				{
 					sequencemain.counter = 0;
-
-					buzzer.f.job = 1;
-
 					sequencemain.sm0++;
 				}
 			}
@@ -449,9 +430,6 @@ int main(void)
 				if (++sequencemain.counter >= 1)//setup Time new channel ADS1115
 				{
 					sequencemain.counter = 0;
-
-					buzzer.f.job = 1;
-
 					sequencemain.sm0++;
 				}
 			}
