@@ -56,81 +56,16 @@ struct _main_flag
 
 }main_flag = { 0,0 };
 
-/*
- * #define MUX_AIN0_AIN3   0x01
-    #define MUX_AIN1_AIN3   0x02
-    #define MUX_AIN2_AIN3   0x03
- */
-void ads1115(void)
-{
-    int16_t ib16;
-    uint8_t reg[2];
 
-    //
-    char str[20];
-    float v=0;
-	while (1)
-	{
-		I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
-		ib16 = (reg[0]<<8) + reg[1];
-		itoa(ib16,  str,  10);
-		strcat(str,"\n");
-		//usart_println_string(str);
-		//
-		v = (ib16*2.048f/32768);
-		dtostrf(v, 0, 3, str);
-		strcat(str,"\n");
-		usart_println_string(str);
-		//
-
-	}
-}
-
-
-/*
- * A1=A2=Gnd
- */
-
-//Secondary Device Address
-#define INA238_ADDR_A1_A0_GND 0x40	//address
-
-//Registers
-#define INA238_CONFIG0 0
-#define INA238_CONFIG1 1
-
-void INA238(void)
-{
-
-	uint8_t reg[2];
-
-	USART_Init ( (int)MYUBRR );
-
-
-	////////////////////////////////////////////
-	I2C_unimaster_init(100E3);//100KHz
-
-	__delay_ms(10);
-	reg[0] = 0;
-	reg[1] = 1<<4;	//40.96mV
-
-	I2Ccfx_WriteArray(0x80, INA238_CONFIG1, &reg[0], 2);
-
-	while (1)
-	{
-
-		usart_println_string("INA238");
-		__delay_ms(100);
-	}
-}
-void xxx(void);
-void ina238_test(void);
-void ina238_ads1115_test(void);
 
 float mv1;
 float mv2;
 float mv3;
 float current;
-float position;
+//float position;
+volatile float recorrido = 0.0f;
+volatile int8_t captureData;
+volatile int8_t sendRecorrido;
 
 //+- Encoder
 uint16_t ENCODER_PPR = 500;    			//500 Pulses Per Revolution
@@ -145,15 +80,14 @@ volatile ROTARYCOUNT_T rotaryCount_last = 0;	//toma el valor de rotaryCount para
 int32_t numPulsesIn_ADQ_KMETERS = 0; //(ADQ_KMETERS * ENCODER_PPR) / ENCODER_1REV_INMETERS;//truncar
 int32_t numPulses_diff = 0;
 //
-volatile float recorrido = 0.0f;
-volatile int8_t captureData;
-volatile int8_t sendRecorrido;
 
 struct _job
 {
 	int8_t sm0;//x jobs
 	//int8_t key_sm0;//x keys
-	uint16_t counter;
+
+	uint16_t counter0;
+	uint16_t counter1;
 	//int8_t mode;
 
 	struct _job_f
@@ -188,6 +122,8 @@ void sequence_reset(void)
 /*
  *
  */
+#define ADS1115_KTIME_CAPTURE_AVERAGE 1	//10e-3
+
 int8_t ADS1115_capture_mvx(float *mvx)
 {
 	int16_t ib16;
@@ -196,18 +132,45 @@ int8_t ADS1115_capture_mvx(float *mvx)
 	//
 	static int16_t smoothVector[SMOOTHALG_MAXSIZE];
 
+////+++++++++
+//I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
+//ib16 = (reg[0]<<8) + reg[1];
+//ib16*=-1;
+//*mvx = (ib16*2.048f/32768);
+//return 1;
+//+++++++++
+
 	if (capturemvx.sm0 == 0)
 	{
 		I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
 		ib16 = (reg[0]<<8) + reg[1];
-		smoothVector[capturemvx.counter] = ib16;
-		if (++capturemvx.counter >= SMOOTHALG_MAXSIZE)
+		smoothVector[capturemvx.counter0] = ib16;
+
+		if (++capturemvx.counter0 >= SMOOTHALG_MAXSIZE)
 		{
-			capturemvx.counter = 0x00;
-			capturemvx.sm0++;
+			capturemvx.counter0 = 0x00;
+			capturemvx.sm0 = 2;
+		}
+		else
+		{
+			capturemvx.counter1 = 0;
+			capturemvx.sm0 = 1;
 		}
 	}
+
 	else if (capturemvx.sm0 == 1)
+	{
+		if (main_flag.f10ms)
+		{
+			if (++capturemvx.counter1 > ADS1115_KTIME_CAPTURE_AVERAGE)
+			{
+				capturemvx.counter1 = 0;
+				capturemvx.sm0--;
+			}
+		}
+	}
+
+	else if (capturemvx.sm0 == 2)
 	{
 		if (smoothAlg_nonblock(smoothVector, &smoothAnswer))
 		{
@@ -245,18 +208,10 @@ void USB_send_data(char datacode, float payload0)
 	usart_println_string(str);
 }
 
+uint8_t old_PORTRxENC_CHB;
+
 int main(void)
 {
-
-	char str[30];
-	char buff[20];
-	int16_t ib16;
-	float mVx = 0;
-	float current = 0;
-	//
-	//int8_t sm0 = 0;
-	//uint16_t counter0;
-
 	PinTo1(PORTWxOUT1,PINxOUT1);
 	ConfigOutputPin(CONFIGIOxOUT1, PINxOUT1);
 
@@ -274,13 +229,13 @@ int main(void)
 	USART_Init ( (int)MYUBRR );
 
 	////Encoder setup Atmega328P, external Pull-ups 1K
-	////channel A = PD2 INT0
-	////channel B = PD3 INT1
-	//EICRA = 0x0F;//rising edge on INT1, INT0
-	//EIMSK = 0x03;//Enable interrupt on INT1, INT0
-	//sei();
-	//while (1);
-	////
+	//channel A = PD2 INT0
+	//channel B = PD3 INT1
+	EICRA = 0x05;//Any logical change on INT1 generates an interrupt request.
+	EIMSK = 0x03;//Enable interrupt on INT1, INT0
+	sei();
+	while (1);
+	//
 
 
 	I2C_unimaster_init(400E3);//100KHz
@@ -295,6 +250,9 @@ int main(void)
     TIMSK0 |= (1 << OCIE0A);
     sei();
 
+int16_t c=0;
+int8_t simulate = 1;
+uint32_t Rrecorrido = 0;
 
 	while (1)
 	{
@@ -303,11 +261,33 @@ int main(void)
 			isr_flag.f10ms = 0;
 			main_flag.f10ms = 1;
 		}
+		//---SIMULATING ENCODER----------------
+		if (simulate == 1)
+		{
+			if (main_flag.f10ms)
+			{
+				if (++c >=10)//c/100 ms
+				{
+					c = 0;
+					Rrecorrido++;
+					sendRecorrido = 1;
+					//
+					if ( (Rrecorrido % 10) == 0)
+					{
+						captureData = 1;
+						simulate = 0;
+					}
+				}
+			}
+		}
+
+
+		//----------------------
 		//----------------------
 		if (sendRecorrido)
 		{
 			sendRecorrido = 0;
-			USB_send_data(USB_DATACODE_POSITION, recorrido);
+			USB_send_data(USB_DATACODE_POSITION, Rrecorrido);
 		}
 
 		if (sequencemain.sm0 == 0)
@@ -318,7 +298,7 @@ int main(void)
 
 				captureData = 0;
 				//
-				sequencemain.counter = 0x0000;
+				sequencemain.counter0 = 0x0000;
 				sequencemain.sm0++;
 			}
 		}
@@ -326,14 +306,12 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 20)//20*10ms = 200ms
+				if (++sequencemain.counter0 >= 20)//20*10ms = 200ms
 				{
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 
 					ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
 					ADS1115_setOperatingMode(CONTINUOUS_CONV);
-
-
 
 					sequencemain.sm0++;
 				}
@@ -343,9 +321,9 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 1)//setup Time new channel ADS1115
+				if (++sequencemain.counter0 >= 1)//setup Time new channel ADS1115
 				{
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 
 					buzzer.f.job = 1;
 
@@ -368,11 +346,11 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 10)//10*10ms = 100ms
+				if (++sequencemain.counter0 >= 10)//10*10ms = 100ms
 				{
 					PinTo1(PORTWxOUT2, PINxOUT2);
 
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 					sequencemain.sm0++;
 				}
 			}
@@ -381,9 +359,9 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 20)//20*10ms = 200ms
+				if (++sequencemain.counter0 >= 20)//20*10ms = 200ms
 				{
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 
 					ADS1115_setMuxChannel(MUX_AIN1_AIN3);//mv2
 					ADS1115_setOperatingMode(CONTINUOUS_CONV);
@@ -396,9 +374,9 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 1)//setup Time new channel ADS1115
+				if (++sequencemain.counter0 >= 1)//setup Time new channel ADS1115
 				{
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 
 					buzzer.f.job = 1;
 
@@ -430,9 +408,9 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 20)//20*10ms = 200ms
+				if (++sequencemain.counter0 >= 20)//20*10ms = 200ms
 				{
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 
 					ADS1115_setMuxChannel(MUX_AIN2_AIN3);//mv3
 					ADS1115_setOperatingMode(CONTINUOUS_CONV);
@@ -446,9 +424,9 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 1)//setup Time new channel ADS1115
+				if (++sequencemain.counter0 >= 1)//setup Time new channel ADS1115
 				{
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 
 					buzzer.f.job = 1;
 
@@ -479,11 +457,11 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 10)//10*10ms = 100ms
+				if (++sequencemain.counter0 >= 10)//10*10ms = 100ms
 				{
 					PinTo0(PORTWxOUT2, PINxOUT2);
 
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 					sequencemain.sm0++;
 				}
 			}
@@ -492,12 +470,15 @@ int main(void)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++sequencemain.counter >= 10)//10*10ms = 100ms
+				if (++sequencemain.counter0 >= 10)//10*10ms = 100ms
 				{
 					PinTo1(PORTWxOUT1, PINxOUT1);
 
-					sequencemain.counter = 0;
+					sequencemain.counter0 = 0;
 					sequencemain.sm0 = 0x0000;
+
+					//*
+					simulate = 1;
 				}
 			}
 		}
@@ -521,17 +502,17 @@ void buzzer_job(void)
 		if (buzzer.sm0 == 0)
 		{
 			PinTo1(PORTWxBUZZER, PINxBUZZER);
-			buzzer.counter = 0;
+			buzzer.counter0 = 0;
 			buzzer.sm0++;
 		}
 		else if (buzzer.sm0 == 1)
 		{
 			if (main_flag.f10ms)
 			{
-				if (++buzzer.counter >= BUZZER_KTIME)
+				if (++buzzer.counter0 >= BUZZER_KTIME)
 				{
 					PinTo0(PORTWxBUZZER, PINxBUZZER);
-					buzzer.counter = 0;
+					buzzer.counter0 = 0;
 					buzzer.sm0 = 0x0;
 					buzzer.f.job = 0;
 				}
@@ -539,160 +520,6 @@ void buzzer_job(void)
 		}
 	}
 }
-
-void xxx(void)
-{
-	uint8_t reg[2];
-	int16_t ib16;
-    char str[20];
-    float v=0;
-
-	USART_Init ( (int)MYUBRR );
-	I2C_unimaster_init(400E3);//100KHz
-
-	//ADS115 setup
-	reg[0] = (1<<OS_BIT) | (MUX_AIN1_AIN3<<MUX_BIT) | (PGA_2p048V<<PGA_BIT) | (CONTINUOUS_CONV<<MODE_BIT);
-	reg[1] = (DR_8SPS<<DR_BIT);//Menor ruido
-	I2Ccfx_WriteArray(ADS115_ADR_GND, ADS1115_CONFIG_REG, &reg[0], 2);
-
-	while (1)
-	{
-		__delay_ms(10);
-		reg[0] = 0;
-		reg[1] = 1<<4;	//40.96mV
-		I2Ccfx_WriteArray(0x80, INA238_CONFIG1, &reg[0], 2);
-
-
-		//////////////////
-//		reg[0] = (1<<OS_BIT) | (MUX_AIN1_AIN3<<MUX_BIT) | (PGA_2p048V<<PGA_BIT) | (CONTINUOUS_CONV<<MODE_BIT);
-//		reg[1] = (DR_8SPS<<DR_BIT);//Menor ruido
-//		I2Ccfx_WriteArray(ADS115_ADR_GND, ADS1115_CONFIG_REG, &reg[0], 2);
-
-		//
-		I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
-		ib16 = (reg[0]<<8) + reg[1];
-		itoa(ib16,  str,  10);
-		strcat(str,"\n");
-		//usart_println_string(str);
-		//
-		v = (ib16*2.048f/32768);
-		dtostrf(v, 0, 3, str);
-		strcat(str,"\n");
-		usart_println_string(str);
-		//
-	}
-	////////////
-
-}
-
-
-void ina238_test(void)
-{
-	char str[30];
-	char buff[20];
-	int16_t curr_reg = 0;
-	float current = 0;
-
-	USART_Init ( (int)MYUBRR );
-	I2C_unimaster_init(400E3);//100KHz
-
-
-	INA238_init();//INA238_REG_CONFI to ± 40.96 mV --> INA238_1_LSB_STEPSIZE_ADCRANGE_40p96mV 1.25E-6 para todos los calculos
-	while (1)
-	{
-		float shuntvoltage = INA238_read_shuntvoltage_register() * INA238_1_LSB_STEPSIZE_ADCRANGE_40p96mV;
-
-		curr_reg = INA238_read_current_register();
-	    current = curr_reg * INA238_CURRENT_LSB;
-
-
-	    if (current > 0.0001f)
-		{
-			current +=1.7e-3;
-		}
-
-	    /*
-		strcpy(str, "shuntvoltage: ");
-		dtostrf(shuntvoltage, 0, 4, buff);
-		strcat(str,buff);
-		strcat(str,"\n");
-		usart_println_string(str);
-		*/
-		//
-
-		strcpy(str, "INA238 current: ");
-		dtostrf(current, 0, 4, buff);
-		strcat(str,buff);
-		strcat(str,"\n");
-		usart_println_string(str);
-		//
-
-
-	}
-}
-
-void ina238_ads1115_test(void)
-{
-	char str[30];
-	char buff[20];
-	int16_t ib16;
-	float mVx = 0;
-	float current = 0;
-	//float shuntvoltage = 0;
-
-	USART_Init ( (int)MYUBRR );
-	I2C_unimaster_init(400E3);//100KHz
-
-	uint8_t reg[2];
-	//ADS115 setup
-	reg[0] = (1<<OS_BIT) | (MUX_AIN1_AIN3<<MUX_BIT) | (PGA_2p048V<<PGA_BIT) | (CONTINUOUS_CONV<<MODE_BIT);
-	reg[1] = (DR_8SPS<<DR_BIT);//Menor ruido
-	I2Ccfx_WriteArray(ADS115_ADR_GND, ADS1115_CONFIG_REG, &reg[0], 2);
-
-	//INA238 setup
-	INA238_init();//INA238_REG_CONFI to ± 40.96 mV --> INA238_1_LSB_STEPSIZE_ADCRANGE_40p96mV 1.25E-6 para todos los calculos
-
-	while (1)
-	{
-		//shuntvoltage = INA238_read_shuntvoltage_register() * INA238_1_LSB_STEPSIZE_ADCRANGE_40p96mV;
-	    current = INA238_read_current_register() * INA238_CURRENT_LSB;
-	    if (current > 0.0001f)
-		{
-			current +=1.7e-3;
-		}
-	    /*
-		strcpy(str, "shuntvoltage: ");
-		dtostrf(shuntvoltage, 0, 4, buff);
-		strcat(str,buff);
-		strcat(str,"\n");
-		usart_println_string(str);
-		*/
-		//
-
-		strcpy(str, "INA238 current: ");
-		dtostrf(current, 0, 4, buff);
-		strcat(str,buff);
-		strcat(str,"\n");
-		usart_println_string(str);
-
-		//
-		//
-		I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
-		ib16 = (reg[0]<<8) + reg[1];
-		ib16*=-1;
-		mVx = (ib16*2.048f/32768);
-		dtostrf(mVx, 0, 4, buff);
-		//
-		strcpy(str, "ADS1115 mVx: ");
-		strcat(str,buff);
-		strcat(str,"\n");
-		usart_println_string(str);
-		//
-
-	}
-}
-
-
 
 void encoder_numpulse(void)
 {
@@ -736,11 +563,37 @@ ISR(INT1_vect)//channel B = PD3 INT1
 	encoder_numpulse();
 
 }
-
 /*
- *OK, pero ahora probando con float buffer
+ * encoder routine
+
+ * 0000BA00
  */
 
+void encoder_xor(void)
+{
+	volatile static uint8_t old_PORTRxENC_CHB;
+	uint8_t xor;
+
+	xor = PORTRxENC_CHA ^ (old_PORTRxENC_CHB>>1);
+	old_PORTRxENC_CHB = PORTRxENC_CHB;//save CHB
+	if (xor & (1<<PINxENC_CHA))
+	{
+		rotaryCount++;
+	}
+	else
+	{
+		rotaryCount--;
+	}
+	rotaryCount >>= 2;//div by 4
+
+
+}
+
+
+
+/*
+ *
+ */
 int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer)
 {
 	static float average=0;
@@ -753,16 +606,16 @@ int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer)
 	if (smoothAlgJob.sm0 == 0)
 	{
 		average = 0;
-		smoothAlgJob.counter = 0x0;
+		smoothAlgJob.counter0 = 0x0;
 		smoothAlgJob.sm0++;
 	}
 	if (smoothAlgJob.sm0 == 1)
 	{
-		average +=buffer[smoothAlgJob.counter];
+		average +=buffer[smoothAlgJob.counter0];
 
-		if (++smoothAlgJob.counter >= SMOOTHALG_MAXSIZE)
+		if (++smoothAlgJob.counter0 >= SMOOTHALG_MAXSIZE)
 		{
-			smoothAlgJob.counter = 0x00;//bug fixed
+			smoothAlgJob.counter0 = 0x00;//bug fixed
 
 			average /= SMOOTHALG_MAXSIZE;
 			//
@@ -775,19 +628,19 @@ int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer)
 	//2 - Find Pos and Neg + |Dtotal|
 	else if (smoothAlgJob.sm0 == 2)
 	{
-		if (buffer[smoothAlgJob.counter] > average)
+		if (buffer[smoothAlgJob.counter0] > average)
 		{
 			Pos++;
-			TD += ( ((float)(buffer[smoothAlgJob.counter]))-average);//Find |Dtotal|
+			TD += ( ((float)(buffer[smoothAlgJob.counter0]))-average);//Find |Dtotal|
 		}
-		if (buffer[smoothAlgJob.counter] < average)
+		if (buffer[smoothAlgJob.counter0] < average)
 		{
 			Neg++;
 		}
 		//
-		if (++smoothAlgJob.counter >= SMOOTHALG_MAXSIZE)
+		if (++smoothAlgJob.counter0 >= SMOOTHALG_MAXSIZE)
 		{
-			smoothAlgJob.counter = 0;
+			smoothAlgJob.counter0 = 0;
 			smoothAlgJob.sm0 = 0;
 			//bug
 			if (TD<0)

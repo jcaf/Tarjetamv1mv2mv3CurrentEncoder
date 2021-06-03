@@ -23,7 +23,7 @@ void ADS1115_write_data16bits(uint8_t ADS1115_I2Caddr, uint8_t ADS1115register, 
 
 	void ADS1115_init(void)
 	{
-		#ifndef ADS1115_CONTROL_BITS
+		#ifndef ADS1115_CONFIG_REG_UPDATE_IN_RUNTIME
 		uint16_t
 		#endif
 		ADS1115_ConfigRegister = (0<<OS_BIT) | (MUX_AIN0_AIN3<<MUX_BIT) | (PGA_2p048V<<PGA_BIT) | (SINGLESHOT_POWERDOWN_CONV<<MODE_BIT) | (DR_128SPS<<DR_BIT);
