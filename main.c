@@ -245,20 +245,21 @@ int main(void)
     	PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
     	PCMSK2 	= 0x0C;//PCINT18 PCINT19
     	old_PORTRxENC_CHB = PORTRxENC_CHB;
-    //	sei();
-    //	char str[20];
-    //	while (1)
-    //	{
-    //		if (sendRecorrido)
-    //		{
-    //			sendRecorrido=0;
-    //			itoa(rotaryCount,  str,  10);
-    //			strcat(str,"\n");
-    //			usart_println_string(str);
-    //
-    //		}
-    //	}
-    	//
+    	/*
+    	sei();
+    	char str[20];
+    	while (1)
+    	{
+    		if (1)//(sendRecorrido)
+    		{
+    			sendRecorrido=0;
+    			itoa(rotaryCount,  str,  10);
+    			strcat(str,"\n");
+    			usart_println_string(str);
+
+    		}
+    	}
+		*/
     sei();
 
 
@@ -530,6 +531,7 @@ void encoder_numpulse(void)
  * encoder routine
  * 0000BA00
  */
+/*
 ISR(PCINT2_vect)//void encoder_xor(void)
 {
 	uint8_t xor;
@@ -553,10 +555,87 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 		encoder_numpulse();
 		sendRecorrido = 1;//
 	}
+}
+*/
 
+volatile struct _encoder
+{
+	struct _encoder_flag
+	{
+		unsigned commingFromInc:1;
+		unsigned commingFromDec:1;
+		unsigned update:1;
+		unsigned __a:5;
+	}f;
+
+}encoder;
+
+ISR(PCINT2_vect)//void encoder_xor(void)
+{
+	uint8_t direction;
+	volatile static int8_t c = 0;
+	//
+	direction = (PORTRxENC_CHA ^ (old_PORTRxENC_CHB>>1) ) & (1<<PINxENC_CHA);
+	old_PORTRxENC_CHB = PORTRxENC_CHB;//save CHB
+	//
+	if (direction != 0 )
+	{
+		encoder.f.commingFromInc = 1;
+		if (c>=4)
+		{
+			c = 0;
+		}
+		c++;
+		if (c == 4)
+		{
+			if (encoder.f.commingFromDec == 1)
+			{
+				encoder.f.commingFromDec = 0;
+
+			}
+			else
+			{
+				encoder.f.update = 1;
+			}
+		}
+	}
+	else
+	{
+		encoder.f.commingFromDec = 1;
+		if (c<=0)
+		{
+			c = 4;
+		}
+		c--;
+		if (c == 0)
+		{
+			if (encoder.f.commingFromInc == 1)
+			{
+				encoder.f.commingFromInc = 0;
+			}
+			else
+			{
+				encoder.f.update = 1;
+			}
+		}
+	}
+
+	if (encoder.f.update == 1)
+	{
+		encoder.f.update = 0;
+
+		if (direction != 0)
+		{
+			rotaryCount++;
+		}
+		else
+		{
+			rotaryCount--;
+		}
+		sendRecorrido = 1;
+	}
 
 }
-
 
 
 /*
