@@ -19,6 +19,9 @@ void USART_Init( unsigned int ubrr)
     /* Set frame format: 8data, 1stop bit */
     UCSR0C = (0<<USBS0)|(3<<UCSZ00);
     //UCSRC = (1<<URSEL)|(0<<USBS)|(3<<UCSZ0);
+
+    //
+    UCSR0A = 1<<U2X0;
 }
 void USART_Transmit( unsigned char data )
 {

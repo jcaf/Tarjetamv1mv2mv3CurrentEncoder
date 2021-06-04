@@ -56,8 +56,6 @@ struct _main_flag
 
 }main_flag = { 0,0 };
 
-
-
 float mv1;
 float mv2;
 float mv3;
@@ -74,6 +72,8 @@ volatile float ADQ_KMETERS = 0.15f;		//Adquirir cada "x metros"
 float ENC_RESOL = 0;// = (float)ENCODER_1REV_INMETERS/ENCODER_PPR;
 //
 typedef int64_t ROTARYCOUNT_T;
+volatile ROTARYCOUNT_T rotaryCountQuad;
+
 volatile ROTARYCOUNT_T rotaryCount = 0;
 volatile ROTARYCOUNT_T rotaryCount_last = 0;	//toma el valor de rotaryCount para ser el nuevo punto de referencia de inicio
 //Las sgtes. variables no necesitan ser de 64bits
@@ -208,7 +208,8 @@ void USB_send_data(char datacode, float payload0)
 	usart_println_string(str);
 }
 
-uint8_t old_PORTRxENC_CHB;
+volatile uint8_t old_PORTRxENC_CHB;
+volatile uint8_t uno;
 
 int main(void)
 {
@@ -229,12 +230,26 @@ int main(void)
 	USART_Init ( (int)MYUBRR );
 
 	////Encoder setup Atmega328P, external Pull-ups 1K
-	//channel A = PD2 INT0
-	//channel B = PD3 INT1
-	EICRA = 0x05;//Any logical change on INT1 generates an interrupt request.
-	EIMSK = 0x03;//Enable interrupt on INT1, INT0
+	//channel A = PD2 INT0 / PCINT18
+	//channel B = PD3 INT1 / PCINT19
+	//EICRA = 0x0F;
+	//EIMSK = 0x03;//Enable interrupt on INT1, INT0
+	PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
+	PCMSK2 	= 0x0C;//PCINT18 PCINT19
+	old_PORTRxENC_CHB = PORTRxENC_CHB;
 	sei();
-	while (1);
+	char str[20];
+	while (1)
+	{
+		if (uno)
+		{
+			uno=0;
+			itoa(rotaryCount,  str,  10);
+			strcat(str,"\n");
+			usart_println_string(str);
+
+		}
+	}
 	//
 
 
@@ -523,69 +538,49 @@ void buzzer_job(void)
 
 void encoder_numpulse(void)
 {
-	char str[20];
 	numPulses_diff = rotaryCount - rotaryCount_last;
-	recorrido = rotaryCount * ENC_RESOL;//-->meters tendria que siempre ser calculado
-	//por cada nuevo cambio en el desplazamiento... enviar al host
+
+	recorrido = rotaryCount * ENC_RESOL;	//-->meters tendria que siempre ser calculado
+											//por cada nuevo cambio en el desplazamiento... enviar al host
+
 	if (numPulses_diff >= numPulsesIn_ADQ_KMETERS)
 	{
 		rotaryCount_last = rotaryCount;
 		//meters = rotaryCount * ENC_RESOL;//-->meters tendria que siempre ser calculado
 		captureData = 1;
 	}
-	itoa(rotaryCount,  str,  10);
-	strcat(str,"\n");
-	usart_println_string(str);
 }
 
-ISR(INT0_vect)//channel A = PD2 INT0
-{
-	if (ReadPin(PORTRxENC_CHB,PINxENC_CHB) == 1)
-	{//reverse
-		rotaryCount--;
-	}
-	else//forward
-	{
-		rotaryCount++;
-	}
-	encoder_numpulse();
-}
-ISR(INT1_vect)//channel B = PD3 INT1
-{
-	if (ReadPin(PORTRxENC_CHA,PINxENC_CHA) == 1)
-	{
-		rotaryCount++;
-	}
-	else
-	{
-		rotaryCount--;
-	}
-	encoder_numpulse();
-
-}
 /*
  * encoder routine
-
  * 0000BA00
  */
-
-void encoder_xor(void)
+ISR(PCINT2_vect)//void encoder_xor(void)
 {
-	volatile static uint8_t old_PORTRxENC_CHB;
 	uint8_t xor;
 
 	xor = PORTRxENC_CHA ^ (old_PORTRxENC_CHB>>1);
 	old_PORTRxENC_CHB = PORTRxENC_CHB;//save CHB
 	if (xor & (1<<PINxENC_CHA))
 	{
-		rotaryCount++;
+		rotaryCountQuad++;
 	}
 	else
 	{
-		rotaryCount--;
+		rotaryCountQuad--;
 	}
-	rotaryCount >>= 2;//div by 4
+	rotaryCount = rotaryCountQuad >> 2;//div by 4
 
+	encoder_numpulse();
+//	if (1)//rotaryCount == 500)
+//	{
+//		itoa(rotaryCount,  str,  10);
+//		strcat(str,"\n");
+//		usart_println_string(str);
+//		//while(1);
+//	}
+
+	uno = 1;//
 
 }
 

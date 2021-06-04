@@ -15,11 +15,18 @@ unsigned char USART_Receive( void );
 void USART_Flush( void );
 
 #define FOSC F_CPU // Clock Speed
-#define BAUD 9600//ok
+//#define BAUD 9600//ok
+//#define BAUD 230400//ok
+//#define BAUD 250000//ok
+//#define BAUD 76800 //ok
 //#define BAUD 38400 //ok
+#define BAUD 115200//ok
 //#define BAUD 1200 //ok
 
-#define MYUBRR (FOSC/16/BAUD)-1
+//#define MYUBRR (FOSC/16/BAUD)-1
+
+//#define MYUBRR (FOSC/(16*BAUD))-1
+#define MYUBRR (FOSC/(8*BAUD))-1
 
 void usart_print_string(const char *p);
 void usart_print_PSTRstring(const char *p);
