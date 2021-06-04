@@ -68,7 +68,7 @@ volatile int8_t sendRecorrido;
 //+- Encoder
 uint16_t ENCODER_PPR = 500;    			//500 Pulses Per Revolution
 float ENCODER_1REV_INMETERS = 0.5f;    	//1revol = X meters
-volatile float ADQ_KMETERS = 0.15f;		//Adquirir cada "x metros"
+volatile float ADQ_KMETERS = 1.0f;		//Adquirir cada "x metros"
 float ENC_RESOL = 0;// = (float)ENCODER_1REV_INMETERS/ENCODER_PPR;
 //
 typedef int64_t ROTARYCOUNT_T;
@@ -80,7 +80,8 @@ volatile ROTARYCOUNT_T rotaryCount_last = 0;	//toma el valor de rotaryCount para
 int32_t numPulsesIn_ADQ_KMETERS = 0; //(ADQ_KMETERS * ENCODER_PPR) / ENCODER_1REV_INMETERS;//truncar
 int32_t numPulses_diff = 0;
 //
-
+volatile uint8_t old_PORTRxENC_CHB;//track last change in quadrature
+//
 struct _job
 {
 	int8_t sm0;//x jobs
@@ -192,7 +193,7 @@ int8_t ADS1115_capture_mvx(float *mvx)
 #define USB_DATACODE_MV2 'Y'
 #define USB_DATACODE_MV3 'Z'
 #define USB_DATACODE_CURRENT 'C'
-#define USB_DATACODE_POSITION 'P'
+#define USB_DATACODE_RECORRIDO 'R'
 
 void USB_send_data(char datacode, float payload0)
 {
@@ -208,8 +209,6 @@ void USB_send_data(char datacode, float payload0)
 	usart_println_string(str);
 }
 
-volatile uint8_t old_PORTRxENC_CHB;
-volatile uint8_t uno;
 
 int main(void)
 {
@@ -229,30 +228,6 @@ int main(void)
 
 	USART_Init ( (int)MYUBRR );
 
-	////Encoder setup Atmega328P, external Pull-ups 1K
-	//channel A = PD2 INT0 / PCINT18
-	//channel B = PD3 INT1 / PCINT19
-	//EICRA = 0x0F;
-	//EIMSK = 0x03;//Enable interrupt on INT1, INT0
-	PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
-	PCMSK2 	= 0x0C;//PCINT18 PCINT19
-	old_PORTRxENC_CHB = PORTRxENC_CHB;
-	sei();
-	char str[20];
-	while (1)
-	{
-		if (uno)
-		{
-			uno=0;
-			itoa(rotaryCount,  str,  10);
-			strcat(str,"\n");
-			usart_println_string(str);
-
-		}
-	}
-	//
-
-
 	I2C_unimaster_init(400E3);//100KHz
 	ADS1115_init();//ADS1115 in powerdown state
 	INA238_init();//INA238_REG_CONFI to ± 40.96 mV --> INA238_1_LSB_STEPSIZE_ADCRANGE_40p96mV 1.25E-6 para todos los calculos
@@ -263,11 +238,29 @@ int main(void)
     TCCR0B = (1 << CS02) | (0 << CS01) | (0 << CS00); //CTC PRES=256
     OCR0A = CTC_SET_OCR_BYTIME(10E-3,256);
     TIMSK0 |= (1 << OCIE0A);
+    //
+    ////Encoder setup Atmega328P, external Pull-ups 1K
+    	//channel A = PD2 INT0 / PCINT18
+    	//channel B = PD3 INT1 / PCINT19
+    	PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
+    	PCMSK2 	= 0x0C;//PCINT18 PCINT19
+    	old_PORTRxENC_CHB = PORTRxENC_CHB;
+    //	sei();
+    //	char str[20];
+    //	while (1)
+    //	{
+    //		if (sendRecorrido)
+    //		{
+    //			sendRecorrido=0;
+    //			itoa(rotaryCount,  str,  10);
+    //			strcat(str,"\n");
+    //			usart_println_string(str);
+    //
+    //		}
+    //	}
+    	//
     sei();
 
-int16_t c=0;
-int8_t simulate = 1;
-uint32_t Rrecorrido = 0;
 
 	while (1)
 	{
@@ -276,33 +269,17 @@ uint32_t Rrecorrido = 0;
 			isr_flag.f10ms = 0;
 			main_flag.f10ms = 1;
 		}
-		//---SIMULATING ENCODER----------------
-		if (simulate == 1)
-		{
-			if (main_flag.f10ms)
-			{
-				if (++c >=10)//c/100 ms
-				{
-					c = 0;
-					Rrecorrido++;
-					sendRecorrido = 1;
-					//
-					if ( (Rrecorrido % 10) == 0)
-					{
-						captureData = 1;
-						simulate = 0;
-					}
-				}
-			}
-		}
 
 
 		//----------------------
+		/*
+		 * ajustar el envio con 2 decimales...
+		 */
 		//----------------------
 		if (sendRecorrido)
 		{
 			sendRecorrido = 0;
-			USB_send_data(USB_DATACODE_POSITION, Rrecorrido);
+			USB_send_data(USB_DATACODE_RECORRIDO, recorrido);
 		}
 
 		if (sequencemain.sm0 == 0)
@@ -492,8 +469,6 @@ uint32_t Rrecorrido = 0;
 					sequencemain.counter0 = 0;
 					sequencemain.sm0 = 0x0000;
 
-					//*
-					simulate = 1;
 				}
 			}
 		}
@@ -571,16 +546,14 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 	}
 	rotaryCount = rotaryCountQuad >> 2;//div by 4
 
-	encoder_numpulse();
-//	if (1)//rotaryCount == 500)
-//	{
-//		itoa(rotaryCount,  str,  10);
-//		strcat(str,"\n");
-//		usart_println_string(str);
-//		//while(1);
-//	}
+	static int ii;
+	if (++ii>=4)
+	{
+		ii = 0;
+		encoder_numpulse();
+		sendRecorrido = 1;//
+	}
 
-	uno = 1;//
 
 }
 
