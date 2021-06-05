@@ -11,7 +11,7 @@
  EL CUADRO POSICION SIEMPRE MUESTRA LA POSICION ACTUAL
  AL EXPOTAR, GENERAR EL SGTE FORMATO
 
- TITULO DE CABACERA
+ TITULO DE CABECERA
  * [MV1,DESP],[MV2,CORRIENTE,DESP],[MV3,CORRIENTE,DESP]
 
  En todos los casos capturo desplazaimento
@@ -72,7 +72,7 @@ volatile float ADQ_KMETERS = 1.0f;		//Adquirir cada "x metros"
 float ENC_RESOL = 0;// = (float)ENCODER_1REV_INMETERS/ENCODER_PPR;
 //
 typedef int64_t ROTARYCOUNT_T;
-volatile ROTARYCOUNT_T rotaryCountQuad;
+//volatile ROTARYCOUNT_T rotaryCountQuad;
 
 volatile ROTARYCOUNT_T rotaryCount = 0;
 volatile ROTARYCOUNT_T rotaryCount_last = 0;	//toma el valor de rotaryCount para ser el nuevo punto de referencia de inicio
@@ -192,7 +192,8 @@ int8_t ADS1115_capture_mvx(float *mvx)
 #define USB_DATACODE_MV1 'X'
 #define USB_DATACODE_MV2 'Y'
 #define USB_DATACODE_MV3 'Z'
-#define USB_DATACODE_CURRENT 'C'
+#define USB_DATACODE_MV2CURRENT 'B'
+#define USB_DATACODE_MV3CURRENT 'C'
 #define USB_DATACODE_RECORRIDO 'R'
 
 void USB_send_data(char datacode, float payload0)
@@ -206,8 +207,10 @@ void USB_send_data(char datacode, float payload0)
 	dtostrf(payload0, 0, 4, buff);
 	strcat(str,buff);
 	strcat(str,"\r");
-	usart_println_string(str);
+	//usart_println_string(str);
+	usart_print_string(str);
 }
+#define USB_KDELAY_BEETWEN_2SENDS 5//ms
 
 
 int main(void)
@@ -221,7 +224,7 @@ int main(void)
 	PinTo0(PORTWxBUZZER,PINxBUZZER);
 	ConfigOutputPin(CONFIGIOxBUZZER, PINxBUZZER);
 
-	//
+	//Esto tiene que ser una funcion que se actualice cada vez que se establezca el intervalo desde la PC
 	ENC_RESOL = (float)ENCODER_1REV_INMETERS/ENCODER_PPR;
 	numPulsesIn_ADQ_KMETERS = (ADQ_KMETERS * ENCODER_PPR) / ENCODER_1REV_INMETERS;//truncar
 	//
@@ -280,6 +283,7 @@ int main(void)
 		if (sendRecorrido)
 		{
 			sendRecorrido = 0;
+			recorrido = (rotaryCount * ENC_RESOL);
 			USB_send_data(USB_DATACODE_RECORRIDO, recorrido);
 		}
 
@@ -392,7 +396,9 @@ int main(void)
 				//enviar al host mv2 + corriente actual
 
 				USB_send_data(USB_DATACODE_MV2, mv2);
-				USB_send_data(USB_DATACODE_CURRENT, current);
+
+				__delay_ms(USB_KDELAY_BEETWEN_2SENDS);
+				USB_send_data(USB_DATACODE_MV2CURRENT, current);
 
 				sequencemain.sm0++;
 			}
@@ -441,7 +447,9 @@ int main(void)
 
 				//enviar al host mv3 + corriente actual
 				USB_send_data(USB_DATACODE_MV3, mv3);
-				USB_send_data(USB_DATACODE_CURRENT, current);
+				__delay_ms(USB_KDELAY_BEETWEN_2SENDS);
+				USB_send_data(USB_DATACODE_MV3CURRENT, current);
+
 
 				sequencemain.sm0++;
 			}
@@ -512,20 +520,19 @@ void buzzer_job(void)
 	}
 }
 
-void encoder_numpulse(void)
-{
-	numPulses_diff = rotaryCount - rotaryCount_last;
-
-	recorrido = rotaryCount * ENC_RESOL;	//-->meters tendria que siempre ser calculado
-											//por cada nuevo cambio en el desplazamiento... enviar al host
-
-	if (numPulses_diff >= numPulsesIn_ADQ_KMETERS)
-	{
-		rotaryCount_last = rotaryCount;
-		//meters = rotaryCount * ENC_RESOL;//-->meters tendria que siempre ser calculado
-		captureData = 1;
-	}
-}
+//inline void checkIntervalo(void)
+//{
+//	numPulses_diff = rotaryCount - rotaryCount_last;
+//
+//	//recorrido = rotaryCount * ENC_RESOL;	//-->meters tendria que siempre ser calculado por cada nuevo cambio en el desplazamiento... enviar al host
+//	//libero al ISR de este calculo
+//
+//	if (numPulses_diff >= numPulsesIn_ADQ_KMETERS)
+//	{
+//		rotaryCount_last = rotaryCount;
+//		captureData = 1;
+//	}
+//}
 
 /*
  * encoder routine
@@ -620,6 +627,7 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 		}
 	}
 
+	//Play with encoder
 	if (encoder.f.update == 1)
 	{
 		encoder.f.update = 0;
@@ -633,10 +641,18 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 			rotaryCount--;
 		}
 		sendRecorrido = 1;
+		//
+		numPulses_diff = rotaryCount - rotaryCount_last;
+		//recorrido = rotaryCount * ENC_RESOL;	//-->meters tendria que siempre ser calculado por cada nuevo cambio en el desplazamiento... enviar al host
+												//libero al ISR de este calculo
+		if (numPulses_diff >= numPulsesIn_ADQ_KMETERS)
+		{
+			rotaryCount_last = rotaryCount;
+			captureData = 1;
+		}
+		//
 	}
-
 }
-
 
 /*
  *
