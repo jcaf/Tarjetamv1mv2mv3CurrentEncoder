@@ -31,8 +31,6 @@ y asi secuencialmente
  *
  */
 
-
-
 #include <avr/io.h>
 #include "src/types.h"
 #include "src/system.h"
@@ -41,6 +39,7 @@ y asi secuencialmente
 #include "src/ads1115/ads1115.h"
 #include "src/usart/usart.h"
 #include "src/INA238/INA238.h"
+#include "src/serial/serial.h"
 #include "main.h"
 
 volatile struct _isr_flag
@@ -170,13 +169,13 @@ int8_t ADS1115_capture_mvx(float *mvx)
 			}
 		}
 	}
-
 	else if (capturemvx.sm0 == 2)
 	{
 		if (smoothAlg_nonblock(smoothVector, &smoothAnswer))
 		{
-			smoothAnswer*=-1;
-			*mvx = (smoothAnswer*2.048f/32768);
+			//smoothAnswer*=-1;//invirtiendo la senal
+			//*mvx = (smoothAnswer*2.048f/32768);//expresados en Voltios..tal como es
+			*mvx = (smoothAnswer*-2048.00f/32768);//expresado en mV
 
 			capturemvx.sm0 = 0x0;
 			return 1;
@@ -184,7 +183,6 @@ int8_t ADS1115_capture_mvx(float *mvx)
 	}
 	//
 	return 0;
-
 }
 /*
  *
@@ -192,26 +190,63 @@ int8_t ADS1115_capture_mvx(float *mvx)
 #define USB_DATACODE_MV1 'X'
 #define USB_DATACODE_MV2 'Y'
 #define USB_DATACODE_MV3 'Z'
-#define USB_DATACODE_MV2CURRENT 'B'
-#define USB_DATACODE_MV3CURRENT 'C'
-#define USB_DATACODE_RECORRIDO 'R'
+#define USB_DATACODE_CURRENT 'C'
+#define USB_DATACODE_POSICION 'P'
+//
+#define USB_DATACODE_CAPTURA1_ON 'A'
+#define USB_DATACODE_CAPTURA1_OFF 'B'
+#define USB_DATACODE_CAPTURA2_ON 'D'
+#define USB_DATACODE_CAPTURA2_OFF 'E'
+
+#define USB_DATACODE_AMPLIFICARx10_ON 'F'
+#define USB_DATACODE_AMPLIFICARx10_OFF 'G'
+
+#define USB_DATACODE_OUT1_ON 'H'
+#define USB_DATACODE_OUT1_OFF 'I'
+#define USB_DATACODE_OUT2_ON 'J'
+#define USB_DATACODE_OUT2_OFF 'K'
+//
+
+#define TOKEN_BEGIN '@'
+#define TOKEN_END '\r'
 
 void USB_send_data(char datacode, float payload0)
 {
 	char str[30];
 	char buff[30];
-	strcpy(str,"@");
-	buff[0] = datacode;
-	buff[1] = '\0';
-	strcat(str,buff);
-	dtostrf(payload0, 0, 4, buff);
+
+	str[0] = TOKEN_BEGIN;
+	str[1] = datacode;
+	str[2] = '\0';
+
+	if (datacode == USB_DATACODE_POSICION)
+	{
+		dtostrf(payload0, 0, 3, buff);//solo 2 decimales
+	}
+	else
+	{
+		dtostrf(payload0, 0, 2, buff);//current in mV + mA
+	}
+
 	strcat(str,buff);
 	strcat(str,"\r");
+
 	//usart_println_string(str);
 	usart_print_string(str);
 }
 #define USB_KDELAY_BEETWEN_2SENDS 5//ms
 
+
+float IN238_read_current_mA(void)
+{
+	float current = INA238_read_current_register() * INA238_CURRENT_LSB;
+	if (current > 0.0001f)
+	{
+		current +=1.7e-3;
+	}
+	current *=1000.0f;	//convert a miliamperios
+	return current;
+}
 
 int main(void)
 {
@@ -284,7 +319,9 @@ int main(void)
 		{
 			sendRecorrido = 0;
 			recorrido = (rotaryCount * ENC_RESOL);
-			USB_send_data(USB_DATACODE_RECORRIDO, recorrido);
+			USB_send_data(USB_DATACODE_POSICION, recorrido);
+
+			__delay_ms(USB_KDELAY_BEETWEN_2SENDS);
 		}
 
 		if (sequencemain.sm0 == 0)
@@ -387,16 +424,11 @@ int main(void)
 			{
 				ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);//ADS1115 powerdown
 				//
-				current = INA238_read_current_register() * INA238_CURRENT_LSB;
-				if (current > 0.0001f)
-				{
-					current +=1.7e-3;
-				}
 
+				current = IN238_read_current_mA();
 				//enviar al host mv2 + corriente actual
 
 				USB_send_data(USB_DATACODE_MV2, mv2);
-
 				__delay_ms(USB_KDELAY_BEETWEN_2SENDS);
 				USB_send_data(USB_DATACODE_MV2CURRENT, current);
 
@@ -418,7 +450,6 @@ int main(void)
 				}
 			}
 		}
-
 		else if (sequencemain.sm0 == 9)
 		{
 			if (main_flag.f10ms)
@@ -439,11 +470,7 @@ int main(void)
 			{
 				ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);//ADS1115 powerdown
 				//
-				current = INA238_read_current_register() * INA238_CURRENT_LSB;
-				if (current > 0.0001f)
-				{
-					current +=1.7e-3;
-				}
+				current = IN238_read_current_mA();
 
 				//enviar al host mv3 + corriente actual
 				USB_send_data(USB_DATACODE_MV3, mv3);
@@ -718,3 +745,154 @@ int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer)
 	}
 	return 0;
 }
+
+
+/*
+ * //Construir payload data + checksum
+ @NxxxxFxxxxRxxxxCcc'\r\n'
+ 1234546789........64
+
+ */
+#define RX_BUFFER_MAXSIZE 32
+struct _rx
+{
+	int8_t sm0;
+	char buffer[RX_BUFFER_MAXSIZE];
+}rx;
+
+
+/* recorre todo el array
+ * 1: success
+ * 0: fail
+ */
+
+int8_t str_trimlr(char *str_in, char *str_out, char l, char r)
+{
+	int8_t counter = 0;
+	int8_t idx = 0;
+	int8_t length = strlen(str_in);
+
+	for (counter = 0; counter < length; counter ++)
+	{
+		if (str_in[counter] == l)
+		{
+			counter ++;//sale dejando apuntando al siguiente byte
+			//@N512F
+			//copy
+			for (;counter < length; counter++)
+			{
+
+				if (str_in[counter] == r)
+				{
+					//ok, hasta aqui nomas, procede
+					str_out[idx] = '\0';//fin de cadena trimmed
+					return 1;
+				}
+
+				str_out[idx++] = str_in[counter];
+			}
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * la busqueda en el buffer circular es cada "x" ms
+ * no puede ser directa porque perderia mucho tiempo hasta que se complete la trama completa
+ *
+ * octave:7>  dec2hex(sum(int8('@N512F1023R256')))
+	ans = 321 -> el resultado esta en HEX, solo me quedo con el byte menor = 0x21
+ *
+ * 	@N512F1023R256C21
+	@N512F1023R257C22
+ */
+void rx_trama(void)
+{
+	char serialbuff_out[SCIRBUF_BUFF_SIZE];
+
+	uint8_t bytes_available;
+	char USB_DATACODE;
+	char USB_payload_char[30];
+	int8_t USB_payload_idx=0;
+	char c;
+	int8_t newData = 0;
+	int length;
+
+	static char Cstr[64];//todos los bytes se inicializan a 0
+
+	//busqueda en buffer circular
+	bytes_available = scirbuf_bytes_available();
+	if (bytes_available>0)
+	{
+		scirbuf_read_nbytes((uint8_t*)serialbuff_out, bytes_available); //hago la copia desde el buffer circular hacia el de salida temporal
+		//
+		serialbuff_out[bytes_available] = '\0';//convertir en c_str
+		strcat(Cstr,serialbuff_out);
+
+		//
+		length = strlen(Cstr);
+		//USB_DATACODE = ''
+		for (int i=0; i< length; i++)
+		{
+			c =  Cstr[i];
+			if (rx.sm0 == 0)
+			{
+				if ( c == TOKEN_BEGIN)
+				{
+					USB_payload_idx = 0;
+					rx.sm0++;
+				}
+			}
+			else if (rx.sm0 == 1)
+			{
+				USB_DATACODE = c;
+				rx.sm0++;
+			}
+			else if (rx.sm0 == 2)//storage payload
+			{
+				if (c == TOKEN_END)
+				{
+					USB_payload_char[USB_payload_idx] = '\0';
+					//
+					strcpy(Cstr,"");
+
+					rx.sm0 = 0;
+					newData = 1;
+					break;
+				}
+				else
+				{
+					USB_payload_char[USB_payload_idx++] = c;
+				}
+			}
+		}
+		if (newData == 1)
+		{
+			//float payload_f = atof(USB_payload_char);
+
+			switch (USB_DATACODE)
+			{
+			    case USB_DATACODE_START:
+			    	usart_print_string("USB_DATACODE_START");
+				break;
+				case USB_DATACODE_PAUSE:
+				 break;
+				case USB_DATACODE_RESET:
+				 break;
+				case USB_DATACODE_INTERVALO:
+				 break;
+				case USB_DATACODE_MODE_INTERVALO_METERS:
+				 break;
+				case USB_DATACODE_MODE_INTERVALO_TIME:
+
+				 break;
+			}
+		}
+
+	}
+
+
+}
+
+

@@ -4,10 +4,9 @@
  * Created: 12/30/2016 11:21:41 PM
  *  Author: jcaf
  */
-#include "usart.h"
-
 #include "../system.h"
-//#include "../serial/serial.h"
+#include "usart.h"
+#include "../serial/serial.h"
 
 void USART_Init( unsigned int ubrr)
 {
@@ -15,7 +14,7 @@ void USART_Init( unsigned int ubrr)
     UBRR0H = (unsigned char)(ubrr>>8);
     UBRR0L = (unsigned char)ubrr;
     /*Enable receiver and transmitter */
-    UCSR0B = (1<<RXEN0)|(1<<TXEN0) | (0<<RXCIE0);//DISEnable interrupt;
+    UCSR0B = (1<<RXEN0)|(1<<TXEN0) | (1<<RXCIE0);//Enable interrupt;
     /* Set frame format: 8data, 1stop bit */
     UCSR0C = (0<<USBS0)|(3<<UCSZ00);
     //UCSRC = (1<<URSEL)|(0<<USBS)|(3<<UCSZ0);
@@ -47,10 +46,10 @@ unsigned char USART_Receive( void )
 
 ISR(USART_RX_vect)
 {
-    uint8_t _udr_rx = UDR0;
+    //uint8_t _udr_rx = UDR0;
     //USART_Transmit(_udr_rx);
     //uint8_t u = UDR;
-    //rx_handler();
+    rx_handler();
 }
 //////////////////////////////////////////////
 
