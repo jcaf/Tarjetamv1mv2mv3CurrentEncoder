@@ -4,29 +4,6 @@
  *  Created on: May 22, 2021
  *      Author: jcaf
  *
- *      0......1m.......2....
- CUANDO ARRANCA EL SISTEMA ACTIVA OUT1, DESACTIVA OUT2
- EL BUZZER HACE UN TICK EN CADA CAPTURA, Y EL SOFTWARE TAMBIEN
- KTE DE TIEMPO VARIA HASTA 10 SEG....
- EL CUADRO POSICION SIEMPRE MUESTRA LA POSICION ACTUAL
- AL EXPOTAR, GENERAR EL SGTE FORMATO
-
- TITULO DE CABECERA
- * [MV1,DESP],[MV2,CORRIENTE,DESP],[MV3,CORRIENTE,DESP]
-
- En todos los casos capturo desplazaimento
-
-intervalo = 1 m
-desactivo OUT1
-transcurre un tiempo de 200ms,
-capturo mv1 +
-transcurre un tiempo de 100ms,
-luego activa OUT2,
-LUEGO DE 200ms capturo [mv2 + corriente]
-despues de 200ms capturo [mv3+corriente]
-transcurre un tiempo de 100ms,desactivo OUT2
-transcurre un tiempo de 100ms, y de alli activo OUT1
-y asi secuencialmente
 
  *
  */
@@ -44,13 +21,13 @@ y asi secuencialmente
 
 volatile struct _isr_flag
 {
-    unsigned f10ms :1;
+    unsigned f1ms :1;
     unsigned __a :7;
 } isr_flag = { 0,0 };
 
 struct _main_flag
 {
-    unsigned f10ms :1;
+    unsigned f1ms :1;
     unsigned __a:7;
 
 }main_flag = { 0,0 };
@@ -84,7 +61,6 @@ volatile uint8_t old_PORTRxENC_CHB;//track last change in quadrature
 struct _job
 {
 	int8_t sm0;//x jobs
-	//int8_t key_sm0;//x keys
 
 	uint16_t counter0;
 	uint16_t counter1;
@@ -99,15 +75,18 @@ struct _job
 	}f;
 };
 
-#define SMOOTHALG_MAXSIZE 10L
 
-struct _job emptyJob;
-struct _job smoothAlgJob;
-struct _job capturemvx;
-struct _job sequencemain;
-struct _job buzzer;
 
-#define BUZZER_KTIME 30//10e-3
+struct _job job_reset;
+struct _job job_smoothAlg;
+struct _job job_capture_mvx;
+
+struct _job job_buzzer;
+//
+struct _job job_captura1;
+struct _job job_captura2;
+
+#define BUZZER_KTIME_MS 300
 void buzzer_job(void);
 
 int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer);
@@ -117,13 +96,15 @@ int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer);
  */
 void sequence_reset(void)
 {
-	smoothAlgJob =	capturemvx = sequencemain = buzzer = emptyJob;
+	//smoothAlgJob =	capturemvx = sequencemain = buzzer = emptyJob;
+	job_smoothAlg =	job_reset;
+	job_buzzer = job_reset;
 }
 /*
  *
  */
-#define ADS1115_KTIME_CAPTURE_AVERAGE 1	//10e-3
-
+#define ADS1115_KTIME_CAPTURE_AVERAGE 8//ADS1115 DATARATE = 128 -> 1/128 = 7.8ms
+#define SMOOTHALG_MAXSIZE 5
 int8_t ADS1115_capture_mvx(float *mvx)
 {
 	int16_t ib16;
@@ -132,54 +113,71 @@ int8_t ADS1115_capture_mvx(float *mvx)
 	//
 	static int16_t smoothVector[SMOOTHALG_MAXSIZE];
 
-////+++++++++
-//I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
-//ib16 = (reg[0]<<8) + reg[1];
-//ib16*=-1;
-//*mvx = (ib16*2.048f/32768);
-//return 1;
-//+++++++++
+	////+++++++++
+	//I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
+	//ib16 = (reg[0]<<8) + reg[1];
+	//ib16*=-1;
+	//*mvx = (ib16*2.048f/32768);
+	//return 1;
+	//+++++++++
 
-	if (capturemvx.sm0 == 0)
+
+	//-----------------
+	if (job_capture_mvx.sm0 == 0)
 	{
-		I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
-		ib16 = (reg[0]<<8) + reg[1];
-		smoothVector[capturemvx.counter0] = ib16;
-
-		if (++capturemvx.counter0 >= SMOOTHALG_MAXSIZE)
+		if (main_flag.f1ms)
 		{
-			capturemvx.counter0 = 0x00;
-			capturemvx.sm0 = 2;
-		}
-		else
-		{
-			capturemvx.counter1 = 0;
-			capturemvx.sm0 = 1;
-		}
-	}
-
-	else if (capturemvx.sm0 == 1)
-	{
-		if (main_flag.f10ms)
-		{
-			if (++capturemvx.counter1 > ADS1115_KTIME_CAPTURE_AVERAGE)
+			if (++job_capture_mvx.counter1 >= ADS1115_KTIME_CAPTURE_AVERAGE)
 			{
-				capturemvx.counter1 = 0;
-				capturemvx.sm0--;
+				job_capture_mvx.counter1 = 0;
+
+				//Aqui ya tengo la primera muestra
+				I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
+				ib16 = (reg[0]<<8) + reg[1];
+
+				smoothVector[job_capture_mvx.counter0] = ib16;
+				if (++job_capture_mvx.counter0 >= SMOOTHALG_MAXSIZE)
+				{
+					job_capture_mvx.counter0 = 0x00;
+					job_capture_mvx.sm0 = 2;//calcular smooth
+				}
+				else
+				{
+					job_capture_mvx.counter1 = 0;
+					job_capture_mvx.sm0 = 1;//ejercer un cierto intervalo entre cada muestra para el smooth
+				}
 			}
 		}
 	}
-	else if (capturemvx.sm0 == 2)
-	{
-		if (smoothAlg_nonblock(smoothVector, &smoothAnswer))
-		{
-			//smoothAnswer*=-1;//invirtiendo la senal
-			//*mvx = (smoothAnswer*2.048f/32768);//expresados en Voltios..tal como es
-			*mvx = (smoothAnswer*-2048.00f/32768);//expresado en mV
 
-			capturemvx.sm0 = 0x0;
-			return 1;
+	else if (job_capture_mvx.sm0 == 1)
+	{
+		if (main_flag.f1ms)
+		{
+			if (++job_capture_mvx.counter1 >= ADS1115_KTIME_CAPTURE_AVERAGE)
+			{
+				job_capture_mvx.counter1 = 0;
+				job_capture_mvx.sm0--;
+			}
 		}
+	}
+	else if (job_capture_mvx.sm0 == 2)
+	{
+		#if SMOOTHALG_MAXSIZE == 0
+				*mvx = (smoothVector[0]*-2048.00f/32768);//expresado en mV
+				job_capture_mvx.sm0 = 0x0;
+				return 1;
+		#else
+			if (smoothAlg_nonblock(smoothVector, &smoothAnswer))
+			{
+				//smoothAnswer*=-1;//invirtiendo la senal
+				//*mvx = (smoothAnswer*2.048f/32768);//expresados en Voltios..tal como es
+				*mvx = (smoothAnswer*-2048.00f/32768);//expresado en mV
+
+				job_capture_mvx.sm0 = 0x0;
+				return 1;
+			}
+		#endif
 	}
 	//
 	return 0;
@@ -207,15 +205,15 @@ int8_t ADS1115_capture_mvx(float *mvx)
 #define USB_DATACODE_OUT2_OFF 'K'
 //
 
-#define TOKEN_BEGIN '@'
-#define TOKEN_END '\r'
+#define USB_DATACODE_TOKEN_BEGIN '@'
+#define USB_DATACODE_TOKEN_END '\r'
 
 void USB_send_data(char datacode, float payload0)
 {
 	char str[30];
 	char buff[30];
 
-	str[0] = TOKEN_BEGIN;
+	str[0] = USB_DATACODE_TOKEN_BEGIN;
 	str[1] = datacode;
 	str[2] = '\0';
 
@@ -236,7 +234,7 @@ void USB_send_data(char datacode, float payload0)
 }
 #define USB_KDELAY_BEETWEN_2SENDS 5//ms
 
-
+void rx_trama(void);
 float IN238_read_current_mA(void)
 {
 	float current = INA238_read_current_register() * INA238_CURRENT_LSB;
@@ -273,8 +271,13 @@ int main(void)
 	//Atmega328P TCNT0 CTC mode
     TCNT0 = 0x0000;
     TCCR0A = (1 << WGM01);
-    TCCR0B = (1 << CS02) | (0 << CS01) | (0 << CS00); //CTC PRES=256
-    OCR0A = CTC_SET_OCR_BYTIME(10E-3,256);
+    //CTC PRESCALER=256 + 10E-3 -> OCR0A = 624
+    //TCCR0B = (1 << CS02) | (0 << CS01) | (0 << CS00); //CTC PRES=256
+    //OCR0A = CTC_SET_OCR_BYTIME(1E-3,256);
+
+    //CTC PRESCALER=64 + 1E-3 -> OCR0A = 249
+    TCCR0B = (0 << CS02) | (1 << CS01) | (1 << CS00); //CTC PRES = 64
+    OCR0A = CTC_SET_OCR_BYTIME(1E-3, 64);
     TIMSK0 |= (1 << OCIE0A);
     //
     ////Encoder setup Atmega328P, external Pull-ups 1K
@@ -303,10 +306,10 @@ int main(void)
 
 	while (1)
 	{
-		if (isr_flag.f10ms)
+		if (isr_flag.f1ms)
 		{
-			isr_flag.f10ms = 0;
-			main_flag.f10ms = 1;
+			isr_flag.f1ms = 0;
+			main_flag.f1ms = 1;
 		}
 
 
@@ -324,223 +327,76 @@ int main(void)
 			__delay_ms(USB_KDELAY_BEETWEN_2SENDS);
 		}
 
-		if (sequencemain.sm0 == 0)
-		{
-			if (captureData)
-			{
-				PinTo0(PORTWxOUT1,PINxOUT1);
+		// Captura mv1
+		#define CAPTURA_MVX_DELAY_MS 500
 
-				captureData = 0;
-				//
-				sequencemain.counter0 = 0x0000;
-				sequencemain.sm0++;
+		if (job_captura1.sm0 == 1)
+		{
+			if (1)//(job_captura1.f.enable) //--> aun no es momento
+			{
+				PinTo1(PORTWxOUT1, PINxOUT1);
+				ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
+				job_captura1.sm0++;
 			}
 		}
-		else if (sequencemain.sm0 == 1)
+		else if (job_captura1.sm0 == 2)
 		{
-			if (main_flag.f10ms)
+			if (main_flag.f1ms)
 			{
-				if (++sequencemain.counter0 >= 20)//20*10ms = 200ms
+				if (++job_captura1.counter0 >= CAPTURA_MVX_DELAY_MS)
 				{
-					sequencemain.counter0 = 0;
-
-					ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
+					job_captura1.counter0 = 0x0000;
+					ADS1115_setOS(1);//wakeup ADS1115
 					ADS1115_setOperatingMode(CONTINUOUS_CONV);
-
-					sequencemain.sm0++;
+					job_captura1.sm0++;
 				}
 			}
 		}
-		else if (sequencemain.sm0 == 2)
+		else if (job_captura1.sm0 == 2)
 		{
-			if (main_flag.f10ms)
+			if (ADS1115_capture_mvx(&mv1))//finalizo
 			{
-				if (++sequencemain.counter0 >= 1)//setup Time new channel ADS1115
-				{
-					sequencemain.counter0 = 0;
-
-					buzzer.f.job = 1;
-
-					sequencemain.sm0++;
-				}
+				ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);
+				USB_send_data(USB_DATACODE_MV1, mv1);
+				job_captura1.sm0 = 1;
 			}
 		}
-		else if (sequencemain.sm0 == 3)
-		{
-			if (ADS1115_capture_mvx(&mv1))
-			{
-				ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);//ADS1115 powerdown
 
-				USB_send_data(USB_DATACODE_MV1, mv1);//enviar al host mv1 + recorrido
-
-				sequencemain.sm0++;
-			}
-		}
-		else if (sequencemain.sm0 == 4)
-		{
-			if (main_flag.f10ms)
-			{
-				if (++sequencemain.counter0 >= 10)//10*10ms = 100ms
-				{
-					PinTo1(PORTWxOUT2, PINxOUT2);
-
-					sequencemain.counter0 = 0;
-					sequencemain.sm0++;
-				}
-			}
-		}
-		else if (sequencemain.sm0 == 5)
-		{
-			if (main_flag.f10ms)
-			{
-				if (++sequencemain.counter0 >= 20)//20*10ms = 200ms
-				{
-					sequencemain.counter0 = 0;
-
-					ADS1115_setMuxChannel(MUX_AIN1_AIN3);//mv2
-					ADS1115_setOperatingMode(CONTINUOUS_CONV);
-
-					sequencemain.sm0++;
-				}
-			}
-		}
-		else if (sequencemain.sm0 == 6)
-		{
-			if (main_flag.f10ms)
-			{
-				if (++sequencemain.counter0 >= 1)//setup Time new channel ADS1115
-				{
-					sequencemain.counter0 = 0;
-
-					buzzer.f.job = 1;
-
-					sequencemain.sm0++;
-				}
-			}
-		}
-		else if (sequencemain.sm0 == 7)
-		{
-			if (ADS1115_capture_mvx(&mv2))
-			{
-				ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);//ADS1115 powerdown
-				//
-
-				current = IN238_read_current_mA();
-				//enviar al host mv2 + corriente actual
-
-				USB_send_data(USB_DATACODE_MV2, mv2);
-				__delay_ms(USB_KDELAY_BEETWEN_2SENDS);
-				USB_send_data(USB_DATACODE_MV2CURRENT, current);
-
-				sequencemain.sm0++;
-			}
-		}
-		else if (sequencemain.sm0 == 8)
-		{
-			if (main_flag.f10ms)
-			{
-				if (++sequencemain.counter0 >= 20)//20*10ms = 200ms
-				{
-					sequencemain.counter0 = 0;
-
-					ADS1115_setMuxChannel(MUX_AIN2_AIN3);//mv3
-					ADS1115_setOperatingMode(CONTINUOUS_CONV);
-
-					sequencemain.sm0++;
-				}
-			}
-		}
-		else if (sequencemain.sm0 == 9)
-		{
-			if (main_flag.f10ms)
-			{
-				if (++sequencemain.counter0 >= 1)//setup Time new channel ADS1115
-				{
-					sequencemain.counter0 = 0;
-
-					buzzer.f.job = 1;
-
-					sequencemain.sm0++;
-				}
-			}
-		}
-		else if (sequencemain.sm0 == 10)
-		{
-			if (ADS1115_capture_mvx(&mv3))
-			{
-				ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);//ADS1115 powerdown
-				//
-				current = IN238_read_current_mA();
-
-				//enviar al host mv3 + corriente actual
-				USB_send_data(USB_DATACODE_MV3, mv3);
-				__delay_ms(USB_KDELAY_BEETWEN_2SENDS);
-				USB_send_data(USB_DATACODE_MV3CURRENT, current);
-
-
-				sequencemain.sm0++;
-			}
-		}
-		else if (sequencemain.sm0 == 11)
-		{
-			if (main_flag.f10ms)
-			{
-				if (++sequencemain.counter0 >= 10)//10*10ms = 100ms
-				{
-					PinTo0(PORTWxOUT2, PINxOUT2);
-
-					sequencemain.counter0 = 0;
-					sequencemain.sm0++;
-				}
-			}
-		}
-		else if (sequencemain.sm0 == 12)
-		{
-			if (main_flag.f10ms)
-			{
-				if (++sequencemain.counter0 >= 10)//10*10ms = 100ms
-				{
-					PinTo1(PORTWxOUT1, PINxOUT1);
-
-					sequencemain.counter0 = 0;
-					sequencemain.sm0 = 0x0000;
-
-				}
-			}
-		}
+		//+++++++++++++++++++++++
 		//
+		rx_trama();
 		buzzer_job();
 
 		//clear flags
-		main_flag.f10ms = 0;
+		main_flag.f1ms = 0;
 	}
 }
 ISR(TIMER0_COMPA_vect)
 {
-    isr_flag.f10ms = 1;
+    isr_flag.f1ms = 1;
 }
 
 void buzzer_job(void)
 {
 	//Buzzer
-	if (buzzer.f.job)
+	if (job_buzzer.f.job)
 	{
-		if (buzzer.sm0 == 0)
+		if (job_buzzer.sm0 == 0)
 		{
 			PinTo1(PORTWxBUZZER, PINxBUZZER);
-			buzzer.counter0 = 0;
-			buzzer.sm0++;
+			job_buzzer.counter0 = 0;
+			job_buzzer.sm0++;
 		}
-		else if (buzzer.sm0 == 1)
+		else if (job_buzzer.sm0 == 1)
 		{
-			if (main_flag.f10ms)
+			if (main_flag.f1ms)
 			{
-				if (++buzzer.counter0 >= BUZZER_KTIME)
+				if (++job_buzzer.counter0 >= BUZZER_KTIME_MS)
 				{
 					PinTo0(PORTWxBUZZER, PINxBUZZER);
-					buzzer.counter0 = 0;
-					buzzer.sm0 = 0x0;
-					buzzer.f.job = 0;
+					job_buzzer.counter0 = 0;
+					job_buzzer.sm0 = 0x0;
+					job_buzzer.f.job = 0;
 				}
 			}
 		}
@@ -693,45 +549,45 @@ int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer)
 	//float A;	//Correct answer
 
 	//1- Calculate media
-	if (smoothAlgJob.sm0 == 0)
+	if (job_smoothAlg.sm0 == 0)
 	{
 		average = 0;
-		smoothAlgJob.counter0 = 0x0;
-		smoothAlgJob.sm0++;
+		job_smoothAlg.counter0 = 0x0;
+		job_smoothAlg.sm0++;
 	}
-	if (smoothAlgJob.sm0 == 1)
+	if (job_smoothAlg.sm0 == 1)
 	{
-		average +=buffer[smoothAlgJob.counter0];
+		average +=buffer[job_smoothAlg.counter0];
 
-		if (++smoothAlgJob.counter0 >= SMOOTHALG_MAXSIZE)
+		if (++job_smoothAlg.counter0 >= SMOOTHALG_MAXSIZE)
 		{
-			smoothAlgJob.counter0 = 0x00;//bug fixed
+			job_smoothAlg.counter0 = 0x00;//bug fixed
 
 			average /= SMOOTHALG_MAXSIZE;
 			//
 			Pos = 0;
 			Neg = 0;
 			TD = 0;
-			smoothAlgJob.sm0++;
+			job_smoothAlg.sm0++;
 		}
 	}
 	//2 - Find Pos and Neg + |Dtotal|
-	else if (smoothAlgJob.sm0 == 2)
+	else if (job_smoothAlg.sm0 == 2)
 	{
-		if (buffer[smoothAlgJob.counter0] > average)
+		if (buffer[job_smoothAlg.counter0] > average)
 		{
 			Pos++;
-			TD += ( ((float)(buffer[smoothAlgJob.counter0]))-average);//Find |Dtotal|
+			TD += ( ((float)(buffer[job_smoothAlg.counter0]))-average);//Find |Dtotal|
 		}
-		if (buffer[smoothAlgJob.counter0] < average)
+		if (buffer[job_smoothAlg.counter0] < average)
 		{
 			Neg++;
 		}
 		//
-		if (++smoothAlgJob.counter0 >= SMOOTHALG_MAXSIZE)
+		if (++job_smoothAlg.counter0 >= SMOOTHALG_MAXSIZE)
 		{
-			smoothAlgJob.counter0 = 0;
-			smoothAlgJob.sm0 = 0;
+			job_smoothAlg.counter0 = 0;
+			job_smoothAlg.sm0 = 0;
 			//bug
 			if (TD<0)
 			{
@@ -753,19 +609,13 @@ int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer)
  1234546789........64
 
  */
-#define RX_BUFFER_MAXSIZE 32
-struct _rx
-{
-	int8_t sm0;
-	char buffer[RX_BUFFER_MAXSIZE];
-}rx;
 
 
 /* recorre todo el array
  * 1: success
  * 0: fail
  */
-
+/*
 int8_t str_trimlr(char *str_in, char *str_out, char l, char r)
 {
 	int8_t counter = 0;
@@ -796,6 +646,7 @@ int8_t str_trimlr(char *str_in, char *str_out, char l, char r)
 
 	return 0;
 }
+*/
 
 /*
  * la busqueda en el buffer circular es cada "x" ms
@@ -807,38 +658,46 @@ int8_t str_trimlr(char *str_in, char *str_out, char l, char r)
  * 	@N512F1023R256C21
 	@N512F1023R257C22
  */
+#define RX_CSTR_SIZE 32
+struct _job_rx
+{
+	int8_t sm0;
+}rx;
 void rx_trama(void)
 {
-	char serialbuff_out[SCIRBUF_BUFF_SIZE];
-
+	char sbuff_out_temp[SCIRBUF_BUFF_SIZE];
+	//Cstr es siempre static porque recolecta y junta todos los caracteres disponibles del buffer serial
+	static char Cstr[RX_CSTR_SIZE];//todos los bytes se inicializan a 0
 	uint8_t bytes_available;
-	char USB_DATACODE;
-	char USB_payload_char[30];
+	char USB_DATACODE = ' ';
+	//char USB_payload_char[30];
 	int8_t USB_payload_idx=0;
 	char c;
 	int8_t newData = 0;
 	int length;
 
-	static char Cstr[64];//todos los bytes se inicializan a 0
 
 	//busqueda en buffer circular
 	bytes_available = scirbuf_bytes_available();
 	if (bytes_available>0)
 	{
-		scirbuf_read_nbytes((uint8_t*)serialbuff_out, bytes_available); //hago la copia desde el buffer circular hacia el de salida temporal
+		scirbuf_read_nbytes((uint8_t*)sbuff_out_temp, bytes_available); //hago la copia desde el buffer circular hacia el de salida temporal
 		//
-		serialbuff_out[bytes_available] = '\0';//convertir en c_str
-		strcat(Cstr,serialbuff_out);
+		sbuff_out_temp[bytes_available] = '\0';//convertir en c_str
+		strcat(Cstr,sbuff_out_temp);
 
 		//
 		length = strlen(Cstr);
-		//USB_DATACODE = ''
+
+//usart_print_string(Cstr);
+
+		rx.sm0 = 0;
 		for (int i=0; i< length; i++)
 		{
 			c =  Cstr[i];
 			if (rx.sm0 == 0)
 			{
-				if ( c == TOKEN_BEGIN)
+				if ( c == USB_DATACODE_TOKEN_BEGIN)
 				{
 					USB_payload_idx = 0;
 					rx.sm0++;
@@ -851,7 +710,7 @@ void rx_trama(void)
 			}
 			else if (rx.sm0 == 2)//storage payload
 			{
-				if (c == TOKEN_END)
+				if (c == USB_DATACODE_TOKEN_END)
 				{
 					USB_payload_char[USB_payload_idx] = '\0';
 					//
@@ -870,23 +729,41 @@ void rx_trama(void)
 		if (newData == 1)
 		{
 			//float payload_f = atof(USB_payload_char);
+			newData = 0;
 
 			switch (USB_DATACODE)
 			{
-			    case USB_DATACODE_START:
-			    	usart_print_string("USB_DATACODE_START");
+				case USB_DATACODE_OUT2_ON:
+			    	//usart_print_string("USB_DATACODE_OUT2_ON");
+					PinTo1(PORTWxOUT2,PINxOUT2);
 				break;
-				case USB_DATACODE_PAUSE:
-				 break;
-				case USB_DATACODE_RESET:
-				 break;
-				case USB_DATACODE_INTERVALO:
-				 break;
-				case USB_DATACODE_MODE_INTERVALO_METERS:
-				 break;
-				case USB_DATACODE_MODE_INTERVALO_TIME:
 
+				case USB_DATACODE_OUT2_OFF:
+					//usart_print_string("USB_DATACODE_OUT2_OFF");
+					PinTo0(PORTWxOUT2,PINxOUT2);
 				 break;
+				case USB_DATACODE_AMPLIFICARx10_ON:
+					//usart_print_string("USB_DATACODE_AMPLIFICARx10_ON");
+				 break;
+				case USB_DATACODE_AMPLIFICARx10_OFF:
+					//usart_print_string("USB_DATACODE_AMPLIFICARx10_OFF");
+				 break;
+				case USB_DATACODE_CAPTURA1_ON:
+					//usart_print_string("USB_DATACODE_CAPTURA1_ON");
+					job_captura1.sm0 = 1;
+				 break;
+				case USB_DATACODE_CAPTURA1_OFF:
+					//usart_print_string("USB_DATACODE_CAPTURA1_OFF");
+					job_captura1 = job_capture_mvx = job_reset;
+					break;
+				case USB_DATACODE_CAPTURA2_ON:
+					usart_print_string("USB_DATACODE_CAPTURA2_ON");
+				 break;
+				case USB_DATACODE_CAPTURA2_OFF:
+					usart_print_string("USB_DATACODE_CAPTURA2_OFF");
+				 break;
+				default:
+					break;
 			}
 		}
 

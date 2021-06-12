@@ -176,7 +176,7 @@ void rx_handler(void)//call from ISR
 
     
 	uint8_t char_rx  = UDR0;
-	USART_Transmit(char_rx);
+	//USART_Transmit(char_rx);
 
     if (scirbuf.uflags.bf.buff_lock == 1)
     {
