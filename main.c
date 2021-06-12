@@ -22,13 +22,15 @@
 volatile struct _isr_flag
 {
     unsigned f1ms :1;
-    unsigned __a :7;
+    unsigned send_posicion :1;
+    unsigned __a :6;
 } isr_flag = { 0,0 };
 
 struct _main_flag
 {
     unsigned f1ms :1;
-    unsigned __a:7;
+    unsigned send_corriente :1;
+    unsigned __a:6;
 
 }main_flag = { 0,0 };
 
@@ -38,8 +40,6 @@ float mv3;
 float current;
 //float position;
 volatile float recorrido = 0.0f;
-volatile int8_t captureData;
-volatile int8_t sendRecorrido;
 
 //+- Encoder
 uint16_t ENCODER_PPR = 500;    			//500 Pulses Per Revolution
@@ -318,47 +318,113 @@ int main(void)
 		 * ajustar el envio con 2 decimales...
 		 */
 		//----------------------
-		if (sendRecorrido)
+		if (isr_flag.send_posicion)
 		{
-			sendRecorrido = 0;
+			isr_flag.send_posicion = 0;
 			recorrido = (rotaryCount * ENC_RESOL);
 			USB_send_data(USB_DATACODE_POSICION, recorrido);
 
-			__delay_ms(USB_KDELAY_BEETWEN_2SENDS);
+			//simplicar el delay_ms
+			__delay_ms(USB_KDELAY_BEETWEN_2SENDS);//usar solo centesimas en la posicion
+		}
+		if (main_flag.send_corriente)
+		{
+			current = IN238_read_current_mA();
+			USB_send_data(USB_DATACODE_CURRENT, current);
+			//simplicar el delay_ms
+			__delay_ms(USB_KDELAY_BEETWEN_2SENDS);//usar solo centesimas en la posicion
 		}
 
-		// Captura mv1
 		#define CAPTURA_MVX_DELAY_MS 500
-
-		if (job_captura1.sm0 == 1)
+		//******************** Captura mv1 ****************************
+		if (job_captura1.sm0 > 0)
 		{
-			if (1)//(job_captura1.f.enable) //--> aun no es momento
+			if (job_captura1.sm0 == 1)
 			{
-				PinTo1(PORTWxOUT1, PINxOUT1);
-				ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
-				job_captura1.sm0++;
-			}
-		}
-		else if (job_captura1.sm0 == 2)
-		{
-			if (main_flag.f1ms)
-			{
-				if (++job_captura1.counter0 >= CAPTURA_MVX_DELAY_MS)
+				if (1)//(job_captura1.f.enable) //--> aun no es momento
 				{
-					job_captura1.counter0 = 0x0000;
-					ADS1115_setOS(1);//wakeup ADS1115
-					ADS1115_setOperatingMode(CONTINUOUS_CONV);
+					PinTo1(PORTWxOUT1, PINxOUT1);
+					ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
 					job_captura1.sm0++;
 				}
 			}
-		}
-		else if (job_captura1.sm0 == 2)
-		{
-			if (ADS1115_capture_mvx(&mv1))//finalizo
+			else if (job_captura1.sm0 == 2)
 			{
-				ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);
-				USB_send_data(USB_DATACODE_MV1, mv1);
-				job_captura1.sm0 = 1;
+				if (main_flag.f1ms)
+				{
+					if (++job_captura1.counter0 >= CAPTURA_MVX_DELAY_MS)
+					{
+						job_captura1.counter0 = 0x0000;
+						ADS1115_setOS(1);//wakeup ADS1115
+						ADS1115_setOperatingMode(CONTINUOUS_CONV);
+						job_captura1.sm0++;
+					}
+				}
+			}
+			else if (job_captura1.sm0 == 3)
+			{
+				if (ADS1115_capture_mvx(&mv1))//finalizo
+				{
+					ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);
+					USB_send_data(USB_DATACODE_MV1, mv1);
+					job_captura1.sm0 = 1;
+				}
+			}
+			//
+			if (recorrido <=0.000f)
+			{
+				//
+			}
+		}
+
+		//******************** Captura mv2 + mv3 ****************************
+
+		if (job_captura2.sm0 > 0)
+		{
+			if (job_captura2.sm0 == 1)
+			{
+				if (1)//(job_captura2.f.enable) //--> aun no es momento
+				{
+					PinTo1(PORTWxOUT1, PINxOUT1);
+					PinTo1(PORTWxOUT2, PINxOUT2);
+					ADS1115_setMuxChannel(MUX_AIN1_AIN3);//mv2
+					job_captura2.sm0++;
+				}
+			}
+			else if (job_captura2.sm0 == 2)
+			{
+				if (main_flag.f1ms)
+				{
+					if (++job_captura2.counter0 >= CAPTURA_MVX_DELAY_MS)
+					{
+						job_captura2.counter0 = 0x0000;
+						ADS1115_setOS(1);//wakeup ADS1115
+						ADS1115_setOperatingMode(CONTINUOUS_CONV);
+						job_captura2.sm0++;
+					}
+				}
+			}
+			else if (job_captura2.sm0 == 3)
+			{
+				if (ADS1115_capture_mvx(&mv2))
+				{
+					USB_send_data(USB_DATACODE_MV2, mv2);
+					job_captura2.sm0++;
+				}
+			}
+			else if (job_captura2.sm0 == 4)
+			{
+				if (ADS1115_capture_mvx(&mv3))
+				{
+					ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);
+					USB_send_data(USB_DATACODE_MV3, mv3);
+					job_captura2.sm0 = 1;
+				}
+			}
+			//
+			if (recorrido <=0.000f)
+			{
+				//
 			}
 		}
 
@@ -523,17 +589,18 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 		{
 			rotaryCount--;
 		}
-		sendRecorrido = 1;
-		//
-		numPulses_diff = rotaryCount - rotaryCount_last;
-		//recorrido = rotaryCount * ENC_RESOL;	//-->meters tendria que siempre ser calculado por cada nuevo cambio en el desplazamiento... enviar al host
-												//libero al ISR de este calculo
-		if (numPulses_diff >= numPulsesIn_ADQ_KMETERS)
-		{
-			rotaryCount_last = rotaryCount;
-			captureData = 1;
-		}
-		//
+
+		isr_flag.send_posicion = 1;
+//		//
+//		numPulses_diff = rotaryCount - rotaryCount_last;
+//		//recorrido = rotaryCount * ENC_RESOL;	//-->meters tendria que siempre ser calculado por cada nuevo cambio en el desplazamiento... enviar al host
+//												//libero al ISR de este calculo
+//		if (numPulses_diff >= numPulsesIn_ADQ_KMETERS)
+//		{
+//			rotaryCount_last = rotaryCount;
+//			captureData = 1;
+//		}
+//		//
 	}
 }
 
@@ -670,7 +737,7 @@ void rx_trama(void)
 	static char Cstr[RX_CSTR_SIZE];//todos los bytes se inicializan a 0
 	uint8_t bytes_available;
 	char USB_DATACODE = ' ';
-	//char USB_payload_char[30];
+	char USB_payload_char[30];
 	int8_t USB_payload_idx=0;
 	char c;
 	int8_t newData = 0;
@@ -735,19 +802,19 @@ void rx_trama(void)
 			{
 				case USB_DATACODE_OUT2_ON:
 			    	//usart_print_string("USB_DATACODE_OUT2_ON");
-					PinTo1(PORTWxOUT2,PINxOUT2);
+					main_flag.send_corriente = 1;
 				break;
 
 				case USB_DATACODE_OUT2_OFF:
 					//usart_print_string("USB_DATACODE_OUT2_OFF");
-					PinTo0(PORTWxOUT2,PINxOUT2);
+					main_flag.send_corriente = 0;
 				 break;
-				case USB_DATACODE_AMPLIFICARx10_ON:
-					//usart_print_string("USB_DATACODE_AMPLIFICARx10_ON");
-				 break;
-				case USB_DATACODE_AMPLIFICARx10_OFF:
-					//usart_print_string("USB_DATACODE_AMPLIFICARx10_OFF");
-				 break;
+//				case USB_DATACODE_AMPLIFICARx10_ON:
+//					//usart_print_string("USB_DATACODE_AMPLIFICARx10_ON");
+//				 break;
+//				case USB_DATACODE_AMPLIFICARx10_OFF:
+//					//usart_print_string("USB_DATACODE_AMPLIFICARx10_OFF");
+//				 break;
 				case USB_DATACODE_CAPTURA1_ON:
 					//usart_print_string("USB_DATACODE_CAPTURA1_ON");
 					job_captura1.sm0 = 1;
@@ -757,10 +824,14 @@ void rx_trama(void)
 					job_captura1 = job_capture_mvx = job_reset;
 					break;
 				case USB_DATACODE_CAPTURA2_ON:
-					usart_print_string("USB_DATACODE_CAPTURA2_ON");
+					//usart_print_string("USB_DATACODE_CAPTURA2_ON");
+					job_captura2.sm0 = 1;
+
 				 break;
 				case USB_DATACODE_CAPTURA2_OFF:
-					usart_print_string("USB_DATACODE_CAPTURA2_OFF");
+					//usart_print_string("USB_DATACODE_CAPTURA2_OFF");
+
+					job_captura2 = job_capture_mvx = job_reset;
 				 break;
 				default:
 					break;
