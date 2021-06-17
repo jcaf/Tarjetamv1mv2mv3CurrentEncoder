@@ -39,25 +39,39 @@ float mv2;
 float mv3;
 float current;
 //float position;
-volatile float recorrido = 0.0f;
+volatile float posicion = 0.0f;
 
 //+- Encoder
+typedef int64_t ROTARYCOUNT_T;
+struct _encoder
+{
+	struct _encoder_flag
+	{
+		unsigned commingFromInc:1;
+		unsigned commingFromDec:1;
+		unsigned update:1;
+		unsigned __a:5;
+	}f;
+	int8_t count4edges;;
+	ROTARYCOUNT_T rotaryCount;
+};
+
+volatile struct _encoder encoder;
+const struct _encoder encoderReset;
+
+
 uint16_t ENCODER_PPR = 500;    			//500 Pulses Per Revolution
 float ENCODER_1REV_INMETERS = 0.5f;    	//1revol = X meters
 volatile float ADQ_KMETERS = 1.0f;		//Adquirir cada "x metros"
 float ENC_RESOL = 0;// = (float)ENCODER_1REV_INMETERS/ENCODER_PPR;
 //
-typedef int64_t ROTARYCOUNT_T;
-//volatile ROTARYCOUNT_T rotaryCountQuad;
-
-volatile ROTARYCOUNT_T rotaryCount = 0;
-volatile ROTARYCOUNT_T rotaryCount_last = 0;	//toma el valor de rotaryCount para ser el nuevo punto de referencia de inicio
 //Las sgtes. variables no necesitan ser de 64bits
 int32_t numPulsesIn_ADQ_KMETERS = 0; //(ADQ_KMETERS * ENCODER_PPR) / ENCODER_1REV_INMETERS;//truncar
 int32_t numPulses_diff = 0;
 //
 volatile uint8_t old_PORTRxENC_CHB;//track last change in quadrature
 //
+
 struct _job
 {
 	int8_t sm0;//x jobs
@@ -71,7 +85,8 @@ struct _job
 		unsigned enable:1;
 		unsigned job:1;
 		unsigned lock:1;
-		unsigned __a:5;
+		unsigned recorridoEnd:1;
+		unsigned __a:4;
 	}f;
 };
 
@@ -203,6 +218,11 @@ int8_t ADS1115_capture_mvx(float *mvx)
 #define USB_DATACODE_OUT1_OFF 'I'
 #define USB_DATACODE_OUT2_ON 'J'
 #define USB_DATACODE_OUT2_OFF 'K'
+
+
+#define USB_DATACODE_MV1_CAPTURA1_END 'L'
+#define USB_DATACODE_MV2MV3_CAPTURA2_END 'M'
+
 //
 
 #define USB_DATACODE_TOKEN_BEGIN '@'
@@ -246,8 +266,96 @@ float IN238_read_current_mA(void)
 	return current;
 }
 
+
+
+void test_ads1115(void)
+{
+	uint8_t reg[2];
+	int16_t ib16;
+	float mvx;
+
+	ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
+	//ADS1115_setMuxChannel(MUX_AIN1_AIN3);//mv2
+	//ADS1115_setMuxChannel(MUX_AIN2_AIN3);//mv3
+	//
+	ADS1115_setOS(1);//wakeup ADS1115
+	ADS1115_setOperatingMode(CONTINUOUS_CONV);
+
+	char buff[20];
+	while (1)
+	{
+		//ADS1115_capture_mvx
+		I2Ccfx_ReadRegistersAtAddress(ADS115_ADR_GND, ADS1115_CONVRS_REG, &reg[0], 2);
+		ib16 = (reg[0]<<8) + reg[1];
+		ib16*=-1;
+		mvx = (ib16*2.048f/32768);
+		//
+		dtostrf(mvx, 0, 3, buff);//solo 2 decimales
+		usart_println_string(buff);
+	}
+}
+void test_ads1115_1(void)
+{
+	float mvx;
+
+	ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
+	//ADS1115_setMuxChannel(MUX_AIN1_AIN3);//mv2
+	//ADS1115_setMuxChannel(MUX_AIN2_AIN3);//mv3
+
+	ADS1115_setOS(1);//wakeup ADS1115
+	ADS1115_setOperatingMode(CONTINUOUS_CONV);
+
+	char buff[20];
+	while (1)
+	{
+		if (isr_flag.f1ms)
+		{
+			isr_flag.f1ms = 0;
+			main_flag.f1ms = 1;
+		}
+		//
+
+		if (ADS1115_capture_mvx(&mvx))
+		{
+			dtostrf(mvx, 0, 3, buff);//solo 2 decimales
+			usart_println_string(buff);
+		}
+		//
+		main_flag.f1ms = 0;
+	}
+}
+
+void testUSB(void)
+{
+	while (1)
+	{
+		if (isr_flag.f1ms)
+		{
+			isr_flag.f1ms = 0;
+			main_flag.f1ms = 1;
+		}
+
+		for (int i=0; i<10; i++)
+		{
+			USB_send_data(USB_DATACODE_POSICION, i+1);
+			//__delay_ms(USB_KDELAY_BEETWEN_2SENDS);//usar solo centesimas en la posicion
+
+			//current = IN238_read_current_mA();
+			USB_send_data(USB_DATACODE_CURRENT, i+2);
+
+			//__delay_ms(USB_KDELAY_BEETWEN_2SENDS);//usar solo centesimas e
+
+		}
+		while (1);
+		main_flag.f1ms = 0;
+	}
+
+}
+
 int main(void)
 {
+	char str[20];
+
 	PinTo1(PORTWxOUT1,PINxOUT1);
 	ConfigOutputPin(CONFIGIOxOUT1, PINxOUT1);
 
@@ -304,6 +412,10 @@ int main(void)
     sei();
 
 
+    //test_ads1115();//ok
+    //test_ads1115_1();
+
+    //testUSB();
 	while (1)
 	{
 		if (isr_flag.f1ms)
@@ -312,33 +424,42 @@ int main(void)
 			main_flag.f1ms = 1;
 		}
 
-
-		//----------------------
-		/*
-		 * ajustar el envio con 2 decimales...
-		 */
-		//----------------------
 		if (isr_flag.send_posicion)
 		{
 			isr_flag.send_posicion = 0;
-			recorrido = (rotaryCount * ENC_RESOL);
-			USB_send_data(USB_DATACODE_POSICION, recorrido);
-
-			//simplicar el delay_ms
-			__delay_ms(USB_KDELAY_BEETWEN_2SENDS);//usar solo centesimas en la posicion
+			posicion = (encoder.rotaryCount * ENC_RESOL);
+			if (posicion >= 0.000f)
+			{
+				USB_send_data(USB_DATACODE_POSICION, posicion);
+			}
 		}
 		if (main_flag.send_corriente)
 		{
 			current = IN238_read_current_mA();
 			USB_send_data(USB_DATACODE_CURRENT, current);
-			//simplicar el delay_ms
-			__delay_ms(USB_KDELAY_BEETWEN_2SENDS);//usar solo centesimas en la posicion
 		}
 
 		#define CAPTURA_MVX_DELAY_MS 500
 		//******************** Captura mv1 ****************************
 		if (job_captura1.sm0 > 0)
 		{
+			//--------------
+			if (job_captura1.f.recorridoEnd == 0)
+			{
+				if (posicion <=0.000f)
+				{
+					//obligar al sistema que fuerce medir mv1 en el recorrido=0, luego
+					//finaliza "Captura1"
+					if (job_captura1.sm0 < 3)
+					{
+						job_captura1.sm0 = 2;//despierta al ADS1115
+						job_captura1.counter0 = CAPTURA_MVX_DELAY_MS;//set to maximum
+						//
+						job_captura1.f.recorridoEnd = 1;
+					}
+				}
+			}
+			//--------------
 			if (job_captura1.sm0 == 1)
 			{
 				if (1)//(job_captura1.f.enable) //--> aun no es momento
@@ -350,7 +471,7 @@ int main(void)
 			}
 			else if (job_captura1.sm0 == 2)
 			{
-				if (main_flag.f1ms)
+				if ( (main_flag.f1ms) || (job_captura1.f.recorridoEnd) )
 				{
 					if (++job_captura1.counter0 >= CAPTURA_MVX_DELAY_MS)
 					{
@@ -358,6 +479,8 @@ int main(void)
 						ADS1115_setOS(1);//wakeup ADS1115
 						ADS1115_setOperatingMode(CONTINUOUS_CONV);
 						job_captura1.sm0++;
+						//
+						job_buzzer.f.job = 1;
 					}
 				}
 			}
@@ -367,13 +490,27 @@ int main(void)
 				{
 					ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);
 					USB_send_data(USB_DATACODE_MV1, mv1);
-					job_captura1.sm0 = 1;
+					job_captura1.sm0--;
+
+					//++-
+					if (job_captura1.f.recorridoEnd)
+					{
+						job_captura1.f.recorridoEnd = 0;
+						//
+						job_captura1 = job_capture_mvx = job_reset;
+						//
+						//OUT1 off
+						PinTo0(PORTWxOUT1, PINxOUT1);
+						//
+						str[0] = USB_DATACODE_TOKEN_BEGIN;
+						str[1] = USB_DATACODE_MV1_CAPTURA1_END;
+						str[2] = USB_DATACODE_TOKEN_END;
+						str[3] = '\0';
+						usart_print_string(str);
+
+					}
+					//-++
 				}
-			}
-			//
-			if (recorrido <=0.000f)
-			{
-				//
 			}
 		}
 
@@ -381,6 +518,23 @@ int main(void)
 
 		if (job_captura2.sm0 > 0)
 		{
+			//--------------
+			if (job_captura2.f.recorridoEnd == 0)
+			{
+				if (posicion <= 0.000f)
+				{
+					//obligar al sistema que fuerce medir mv2+mv3 en el recorrido=0, luego
+					//finaliza "Captura2"
+					if (job_captura2.sm0 < 3)
+					{
+						job_captura2.sm0 = 2;//despierta al ADS1115
+						job_captura2.counter0 = CAPTURA_MVX_DELAY_MS;//set to maximum
+						//
+						job_captura2.f.recorridoEnd = 1;
+					}
+				}
+			}
+			//--------------
 			if (job_captura2.sm0 == 1)
 			{
 				if (1)//(job_captura2.f.enable) //--> aun no es momento
@@ -393,7 +547,7 @@ int main(void)
 			}
 			else if (job_captura2.sm0 == 2)
 			{
-				if (main_flag.f1ms)
+				if ( (main_flag.f1ms) || (job_captura2.f.recorridoEnd) )
 				{
 					if (++job_captura2.counter0 >= CAPTURA_MVX_DELAY_MS)
 					{
@@ -401,6 +555,8 @@ int main(void)
 						ADS1115_setOS(1);//wakeup ADS1115
 						ADS1115_setOperatingMode(CONTINUOUS_CONV);
 						job_captura2.sm0++;
+						//
+						job_buzzer.f.job = 1;
 					}
 				}
 			}
@@ -408,6 +564,8 @@ int main(void)
 			{
 				if (ADS1115_capture_mvx(&mv2))
 				{
+					ADS1115_setMuxChannel(MUX_AIN2_AIN3);//mv3
+
 					USB_send_data(USB_DATACODE_MV2, mv2);
 					job_captura2.sm0++;
 				}
@@ -419,13 +577,29 @@ int main(void)
 					ADS1115_setOperatingMode(SINGLESHOT_POWERDOWN_CONV);
 					USB_send_data(USB_DATACODE_MV3, mv3);
 					job_captura2.sm0 = 1;
+
+					//++-
+					if (job_captura2.f.recorridoEnd)
+					{
+						job_captura2.f.recorridoEnd = 0;
+						//
+						job_captura2 = job_capture_mvx = job_reset;
+						//
+						//OUT1 off
+						PinTo0(PORTWxOUT1, PINxOUT1);
+						PinTo0(PORTWxOUT2, PINxOUT2);
+						//
+						str[0] = USB_DATACODE_TOKEN_BEGIN;
+						str[1] = USB_DATACODE_MV2MV3_CAPTURA2_END;
+						str[2] = USB_DATACODE_TOKEN_END;
+						str[3] = '\0';
+						usart_print_string(str);
+
+					}
+					//-++
 				}
 			}
-			//
-			if (recorrido <=0.000f)
-			{
-				//
-			}
+
 		}
 
 		//+++++++++++++++++++++++
@@ -514,22 +688,27 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 }
 */
 
-volatile struct _encoder
+
+
+void encoder_reset(void)
 {
-	struct _encoder_flag
+	if ( (job_captura1.sm0 == 0) && (job_captura2.sm0 == 0) )
 	{
-		unsigned commingFromInc:1;
-		unsigned commingFromDec:1;
-		unsigned update:1;
-		unsigned __a:5;
-	}f;
+		//
+		PCICR 	= 0x00;//disable PCIE2 PCINT[23:16]
+		//encoder.rotaryCount = 0x0000;
+		encoder = encoderReset;//clear struct
 
-}encoder;
-
+		old_PORTRxENC_CHB = PORTRxENC_CHB;
+		PCMSK2 	= 0x04;//PCINT18 PCINT19 clear flags
+		PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
+		isr_flag.send_posicion = 1;
+	}
+}
 ISR(PCINT2_vect)//void encoder_xor(void)
 {
 	uint8_t direction;
-	volatile static int8_t c = 0;
+	//volatile static int8_t count4edges = 0;
 	//
 	direction = (PORTRxENC_CHA ^ (old_PORTRxENC_CHB>>1) ) & (1<<PINxENC_CHA);
 	old_PORTRxENC_CHB = PORTRxENC_CHB;//save CHB
@@ -537,12 +716,12 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 	if (direction != 0 )
 	{
 		encoder.f.commingFromInc = 1;
-		if (c>=4)
+		if (encoder.count4edges>=4)
 		{
-			c = 0;
+			encoder.count4edges = 0;
 		}
-		c++;
-		if (c == 4)
+		encoder.count4edges++;
+		if (encoder.count4edges == 4)
 		{
 			if (encoder.f.commingFromDec == 1)
 			{
@@ -558,12 +737,12 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 	else
 	{
 		encoder.f.commingFromDec = 1;
-		if (c<=0)
+		if (encoder.count4edges<=0)
 		{
-			c = 4;
+			encoder.count4edges = 4;
 		}
-		c--;
-		if (c == 0)
+		encoder.count4edges--;
+		if (encoder.count4edges == 0)
 		{
 			if (encoder.f.commingFromInc == 1)
 			{
@@ -583,11 +762,11 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 
 		if (direction != 0)
 		{
-			rotaryCount++;
+			encoder.rotaryCount++;
 		}
 		else
 		{
-			rotaryCount--;
+			encoder.rotaryCount--;
 		}
 
 		isr_flag.send_posicion = 1;
