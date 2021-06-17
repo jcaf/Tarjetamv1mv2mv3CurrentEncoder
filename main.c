@@ -18,6 +18,7 @@
 #include "src/INA238/INA238.h"
 #include "src/serial/serial.h"
 #include "main.h"
+#include "src/pinGetLevel/pinGetLevel.h"
 
 volatile struct _isr_flag
 {
@@ -42,6 +43,7 @@ float current;
 volatile float posicion = 0.0f;
 
 //+- Encoder
+void encoder_reset(void);
 typedef int64_t ROTARYCOUNT_T;
 struct _encoder
 {
@@ -106,18 +108,7 @@ void buzzer_job(void);
 
 int8_t smoothAlg_nonblock(int16_t *buffer, float *Answer);
 
-/*
- * Host-to-device or tact-switch on-board reset the sequence, reset all state machines
- */
-void sequence_reset(void)
-{
-	//smoothAlgJob =	capturemvx = sequencemain = buzzer = emptyJob;
-	job_smoothAlg =	job_reset;
-	job_buzzer = job_reset;
-}
-/*
- *
- */
+
 #define ADS1115_KTIME_CAPTURE_AVERAGE 8//ADS1115 DATARATE = 128 -> 1/128 = 7.8ms
 #define SMOOTHALG_MAXSIZE 5
 int8_t ADS1115_capture_mvx(float *mvx)
@@ -266,8 +257,6 @@ float IN238_read_current_mA(void)
 	return current;
 }
 
-
-
 void test_ads1115(void)
 {
 	uint8_t reg[2];
@@ -355,6 +344,8 @@ void testUSB(void)
 int main(void)
 {
 	char str[20];
+	int8_t buttonResetEncoder_counter0=0;
+	int8_t SW=0;
 
 	PinTo1(PORTWxOUT1,PINxOUT1);
 	ConfigOutputPin(CONFIGIOxOUT1, PINxOUT1);
@@ -364,6 +355,8 @@ int main(void)
 
 	PinTo0(PORTWxBUZZER,PINxBUZZER);
 	ConfigOutputPin(CONFIGIOxBUZZER, PINxBUZZER);
+
+	pinGetLevel_init();
 
 	//Esto tiene que ser una funcion que se actualice cada vez que se establezca el intervalo desde la PC
 	ENC_RESOL = (float)ENCODER_1REV_INMETERS/ENCODER_PPR;
@@ -388,33 +381,17 @@ int main(void)
     OCR0A = CTC_SET_OCR_BYTIME(1E-3, 64);
     TIMSK0 |= (1 << OCIE0A);
     //
-    ////Encoder setup Atmega328P, external Pull-ups 1K
-    	//channel A = PD2 INT0 / PCINT18
-    	//channel B = PD3 INT1 / PCINT19
-    	PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
-    	PCMSK2 	= 0x0C;//PCINT18 PCINT19
-    	old_PORTRxENC_CHB = PORTRxENC_CHB;
-    	/*
-    	sei();
-    	char str[20];
-    	while (1)
-    	{
-    		if (1)//(sendRecorrido)
-    		{
-    			sendRecorrido=0;
-    			itoa(rotaryCount,  str,  10);
-    			strcat(str,"\n");
-    			usart_println_string(str);
+    //Encoder setup Atmega328P, external Pull-ups 1K
+	//channel A = PD2 INT0 / PCINT18
+	//channel B = PD3 INT1 / PCINT19
+	PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
+	PCMSK2 	= 0x0C;//PCINT18 PCINT19
+	old_PORTRxENC_CHB = PORTRxENC_CHB;
 
-    		}
-    	}
-		*/
     sei();
-
 
     //test_ads1115();//ok
     //test_ads1115_1();
-
     //testUSB();
 	while (1)
 	{
@@ -603,6 +580,25 @@ int main(void)
 		}
 
 		//+++++++++++++++++++++++
+		if (main_flag.f1ms)
+		{
+			if (++buttonResetEncoder_counter0 >= 20)    //20ms
+			{
+				buttonResetEncoder_counter0 = 0;
+				pinGetLevel_job();
+				if (pinGetLevel_hasChanged(PGLEVEL_LYOUT_SW_ENC_RESET))
+				{
+					SW = !pinGetLevel_level(PGLEVEL_LYOUT_SW_ENC_RESET);
+					pinGetLevel_clearChange(PGLEVEL_LYOUT_SW_ENC_RESET);
+				}
+			}
+		}
+		if ((SW == 1) ) //|| (char == "s") // -> usar el pulsador mientras
+		{
+			encoder_reset();// resetear el contador de # de pulsos
+			SW = 0x00;
+		}
+		//+++++++++++++++++++++++
 		//
 		rx_trama();
 		buzzer_job();
@@ -643,53 +639,6 @@ void buzzer_job(void)
 	}
 }
 
-//inline void checkIntervalo(void)
-//{
-//	numPulses_diff = rotaryCount - rotaryCount_last;
-//
-//	//recorrido = rotaryCount * ENC_RESOL;	//-->meters tendria que siempre ser calculado por cada nuevo cambio en el desplazamiento... enviar al host
-//	//libero al ISR de este calculo
-//
-//	if (numPulses_diff >= numPulsesIn_ADQ_KMETERS)
-//	{
-//		rotaryCount_last = rotaryCount;
-//		captureData = 1;
-//	}
-//}
-
-/*
- * encoder routine
- * 0000BA00
- */
-/*
-ISR(PCINT2_vect)//void encoder_xor(void)
-{
-	uint8_t xor;
-
-	xor = PORTRxENC_CHA ^ (old_PORTRxENC_CHB>>1);
-	old_PORTRxENC_CHB = PORTRxENC_CHB;//save CHB
-	if (xor & (1<<PINxENC_CHA))
-	{
-		rotaryCountQuad++;
-	}
-	else
-	{
-		rotaryCountQuad--;
-	}
-	rotaryCount = rotaryCountQuad >> 2;//div by 4
-
-	static int ii;
-	if (++ii>=4)
-	{
-		ii = 0;
-		encoder_numpulse();
-		sendRecorrido = 1;//
-	}
-}
-*/
-
-
-
 void encoder_reset(void)
 {
 	if ( (job_captura1.sm0 == 0) && (job_captura2.sm0 == 0) )
@@ -698,11 +647,11 @@ void encoder_reset(void)
 		PCICR 	= 0x00;//disable PCIE2 PCINT[23:16]
 		//encoder.rotaryCount = 0x0000;
 		encoder = encoderReset;//clear struct
-
 		old_PORTRxENC_CHB = PORTRxENC_CHB;
-		PCMSK2 	= 0x04;//PCINT18 PCINT19 clear flags
-		PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
 		isr_flag.send_posicion = 1;
+
+		PCIFR 	= 0x04;//PCINT18 PCINT19 clear flags
+		PCICR 	= 0x04;//PCIE2 PCINT[23:16] Any change on any enabled PCINT[23:16] pin will cause an interrupt.
 	}
 }
 ISR(PCINT2_vect)//void encoder_xor(void)
@@ -770,16 +719,6 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 		}
 
 		isr_flag.send_posicion = 1;
-//		//
-//		numPulses_diff = rotaryCount - rotaryCount_last;
-//		//recorrido = rotaryCount * ENC_RESOL;	//-->meters tendria que siempre ser calculado por cada nuevo cambio en el desplazamiento... enviar al host
-//												//libero al ISR de este calculo
-//		if (numPulses_diff >= numPulsesIn_ADQ_KMETERS)
-//		{
-//			rotaryCount_last = rotaryCount;
-//			captureData = 1;
-//		}
-//		//
 	}
 }
 
@@ -1000,17 +939,15 @@ void rx_trama(void)
 				 break;
 				case USB_DATACODE_CAPTURA1_OFF:
 					//usart_print_string("USB_DATACODE_CAPTURA1_OFF");
-					job_captura1 = job_capture_mvx = job_reset;
+					job_captura1 = job_capture_mvx = job_smoothAlg = job_reset;
 					break;
 				case USB_DATACODE_CAPTURA2_ON:
 					//usart_print_string("USB_DATACODE_CAPTURA2_ON");
 					job_captura2.sm0 = 1;
-
 				 break;
 				case USB_DATACODE_CAPTURA2_OFF:
 					//usart_print_string("USB_DATACODE_CAPTURA2_OFF");
-
-					job_captura2 = job_capture_mvx = job_reset;
+					job_captura2 = job_capture_mvx = job_smoothAlg = job_reset;
 				 break;
 				default:
 					break;
