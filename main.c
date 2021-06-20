@@ -29,14 +29,16 @@ volatile struct _isr_flag
 {
     unsigned f1ms :1;
     unsigned send_posicion :1;
-    unsigned __a :6;
+    unsigned posicion_0:1;//solo por EL LO HICD VOLATILE, MEJOR PASARLO A ISR_FLAG
+    unsigned __a :5;
 } isr_flag = { 0,0 };
 
+//volatile
 struct _main_flag
 {
     unsigned f1ms :1;
     unsigned send_corriente :1;
-    unsigned posicion_0:1;
+    unsigned posicion_0:1;//solo por EL LO HICD VOLATILE, MEJOR PASARLO A ISR_FLAG
     unsigned __a:5;
 
 }main_flag = { 0,0 };
@@ -489,100 +491,70 @@ int main(void)
 			isr_flag.f1ms = 0;
 			main_flag.f1ms = 1;
 		}
-
+		if (isr_flag.posicion_0)
+		{
+			isr_flag.posicion_0 = 0;
+			main_flag.posicion_0 = 1;
+		}
+		//-------------------------------------
 		if (isr_flag.send_posicion)
 		{
 			isr_flag.send_posicion = 0;
 			posicion = (encoder.rotaryCount * ENC_RESOL);
-			//
-			//ojo posicion se envia con 3 decimales, lo que no significa que con esos decimales
-			//uno puede decir que ya es absolutamente 0
-			//
-			//0.001
 
-			//0.00009
-			if (posicion >= 0.00000f)
+			//if (encoder.rotaryCount >= 0 )
+			//if (posicion >= 0.000f )
+			if (1)
 			{
 				USB_send_data(USB_DATACODE_POSICION, posicion);
-
-				//solo si cualquiera de los empezo una captura, que como condicion deben estar con la
-				//posicion > 0, entonces se chequea si regresa la posicion a 0
-				if ((job_captura1.sm0 > 0) || (job_captura2.sm0 > 0))
-				{
-					if (posicion == 0.00000f)
-					{
-						main_flag.posicion_0 = 1;	//mata los temporizadores en turno, captura, envia y se
-													//inhabilitan sus jobs
-					}
-					else
-					{
-						main_flag.posicion_0 = 0;
-					}
-					//
-				}
-
-
 			}
 
+
+//			if (encoder.rotaryCount <= 0)
+//			//if (posicion == 0.000f )
+//			{
+//				main_flag.posicion_0 = 1;
+//			}
+
 		}
+		//
 		if (main_flag.send_corriente)
 		{
 			if (IN238_capture_current(&current))
 			{
 				USB_send_data(USB_DATACODE_CURRENT, current);
 			}
-
-//			if (main_flag.f1ms)
-//			{
-//				if (++corriente_counter >= 20)
-//				{
-//					corriente_counter = 0;
-//					current = IN238_read_current_mA();
-//					USB_send_data(USB_DATACODE_CURRENT, current);
-//				}
-//			}
-
 		}
-
-
-
-
+		//
 		//******************** Captura mv1 ****************************
 		if (job_captura1.sm0 > 0)
 		{
-			//
 
 			//--------------
 			if (job_captura1.f.recorridoEnd == 0)
 			{
 				if (main_flag.posicion_0 == 1)
 				{
-					//obligar al sistema que fuerce medir mv1 en el recorrido=0, luego
-					//finaliza "Captura1"
-					if (job_captura1.sm0 < 3)
-					{
-						job_captura1.sm0 = 2;//despierta al ADS1115
-						job_captura1.counter0 = INTERVALO_CAPTURA_MVX;//set to maximum
-						//
-						job_captura1.f.recorridoEnd = 1;
-					}
+					job_captura1.f.recorridoEnd = 1;
+
+					job_captura1.sm0 = 1;
 				}
 			}
 			//--------------
+
+			//--------------
 			if (job_captura1.sm0 == 1)
 			{
-				if (1)//(job_captura1.f.enable) //--> aun no es momento
-				{
-					PinTo1(PORTWxOUT1, PINxOUT1);
-					ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
-					job_captura1.sm0++;
-				}
+				PinTo1(PORTWxOUT1, PINxOUT1);
+				ADS1115_setMuxChannel(MUX_AIN0_AIN3);//mv1
+				job_captura1.counter0 = 0;
+				job_captura1.sm0++;
 			}
 			else if (job_captura1.sm0 == 2)
 			{
 				if ( (main_flag.f1ms) || (job_captura1.f.recorridoEnd) )
 				{
-					if (++job_captura1.counter0 >= INTERVALO_CAPTURA_MVX)
+					if ((++job_captura1.counter0 >= INTERVALO_CAPTURA_MVX) || (job_captura1.f.recorridoEnd))
 					{
 						job_captura1.counter0 = 0x0000;
 						ADS1115_setOS(1);//wakeup ADS1115
@@ -611,8 +583,6 @@ int main(void)
 					//++-
 					if (job_captura1.f.recorridoEnd)
 					{
-						job_captura1.f.recorridoEnd = 0;
-						//
 						job_captura1 = job_capture_mvx = job_reset;
 						//
 						//OUT1 off
@@ -639,36 +609,27 @@ int main(void)
 			{
 				if (main_flag.posicion_0 == 1)
 				{
-					//obligar al sistema que fuerce medir mv2+mv3 en el recorrido=0, luego
-					//finaliza "Captura2"
-					if (job_captura2.sm0 < 3)
-					{
-						job_captura2.sm0 = 2;//despierta al ADS1115
-						job_captura2.counter0 = INTERVALO_CAPTURA_MVX;//set to maximum
-						//
-						job_captura2.f.recorridoEnd = 1;
-					}
+					job_captura2.f.recorridoEnd = 1;
+					//
+					job_captura2.sm0 = 1;
 				}
 			}
 			//--------------
+
 			if (job_captura2.sm0 == 1)
 			{
-				if (1)//(job_captura2.f.enable) //--> aun no es momento
-				{
-					PinTo1(PORTWxOUT1, PINxOUT1);
-					PinTo1(PORTWxOUT2, PINxOUT2);
-					ADS1115_setMuxChannel(MUX_AIN1_AIN3);//mv2
-					job_captura2.sm0++;
+				PinTo1(PORTWxOUT1, PINxOUT1);
+				PinTo1(PORTWxOUT2, PINxOUT2);
+				ADS1115_setMuxChannel(MUX_AIN1_AIN3);//mv2
 
-
-					usart_print_string("job_captura2.sm0 == 1");
-				}
+				job_captura2.counter0 = 0;
+				job_captura2.sm0++;
 			}
 			else if (job_captura2.sm0 == 2)
 			{
 				if ( (main_flag.f1ms) || (job_captura2.f.recorridoEnd) )
 				{
-					if (++job_captura2.counter0 >= INTERVALO_CAPTURA_MVX)
+					if ((++job_captura2.counter0 >= INTERVALO_CAPTURA_MVX) || (job_captura2.f.recorridoEnd))
 					{
 						job_captura2.counter0 = 0x0000;
 						ADS1115_setOS(1);//wakeup ADS1115
@@ -676,8 +637,6 @@ int main(void)
 						job_captura2.sm0++;
 						//
 						job_buzzer.f.job = 1;
-
-						usart_print_string("job_captura2.sm0 == 2");
 					}
 				}
 			}
@@ -696,9 +655,6 @@ int main(void)
 					USB_send_data(USB_DATACODE_MV2, mv2);
 					job_captura2.sm0++;
 					job_captura2.counter1 = 0;
-
-
-					usart_print_string("job_captura2.sm0 == 3");
 				}
 			}
 			else if (job_captura2.sm0 == 4)
@@ -706,13 +662,10 @@ int main(void)
 				if (main_flag.f1ms)
 				{
 					//ADS1115 DATARATE = 128 -> 1/128 = 7.8ms
-					if (++job_captura2.counter1 > (ADS1115_KTIME_CAPTURE_AVERAGE<<1))//7.8ms el tiempo de 1/SPS actual
+					if (++job_captura2.counter1 > (ADS1115_KTIME_CAPTURE_AVERAGE))//7.8ms el tiempo de 1/SPS actual
 					{
 						job_captura2.counter1 = 0;
 						job_captura2.sm0++;
-
-
-						usart_print_string("job_captura2.sm0 == 4");
 					}
 				}
 			}
@@ -730,11 +683,9 @@ int main(void)
 					USB_send_data(USB_DATACODE_MV3, mv3);
 					job_captura2.sm0 = 1;
 
-					usart_print_string("job_captura2.sm0 == 5");
 					//++-
 					if (job_captura2.f.recorridoEnd)
 					{
-						job_captura2.f.recorridoEnd = 0;
 						//
 						job_captura2 = job_capture_mvx = job_reset;
 						//
@@ -748,7 +699,7 @@ int main(void)
 						str[3] = '\0';
 						usart_print_string(str);
 
-						usart_print_string("job_captura2.f.recorridoEnd");
+
 
 					}
 					//-++
@@ -782,7 +733,10 @@ int main(void)
 		buzzer_job();
 
 		//clear flags
+		main_flag.posicion_0 = 0;
 		main_flag.f1ms = 0;
+
+
 	}
 }
 ISR(TIMER0_COMPA_vect)
@@ -861,6 +815,13 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 				//++-Solo para hacer +rapido el ISR
 				encoder.rotaryCount++;
 				isr_flag.send_posicion = 1;
+
+				//
+				if (encoder.rotaryCount == 0)
+				{
+					isr_flag.posicion_0 = 1;
+				}
+
 				//-++
 			}
 		}
@@ -887,6 +848,11 @@ ISR(PCINT2_vect)//void encoder_xor(void)
 				encoder.rotaryCount--;
 				isr_flag.send_posicion = 1;
 				//-++
+				//
+				if (encoder.rotaryCount == 0)
+				{
+					isr_flag.posicion_0 = 1;
+				}
 			}
 		}
 	}
